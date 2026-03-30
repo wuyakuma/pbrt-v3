@@ -57,6 +57,10 @@ PerspectiveCamera::PerspectiveCamera(const AnimatedTransform &CameraToWorld,
     dyCamera =
         (RasterToCamera(Point3f(0, 1, 0)) - RasterToCamera(Point3f(0, 0, 0)));
 
+    // Precompute per-pixel angular spread for ray cone (geometric mean of
+    // the per-pixel angular offsets in x and y at the image center).
+    pixelSpreadAngle = std::sqrt(dxCamera.Length() * dyCamera.Length());
+
     // Compute image plane bounds at $z=1$ for _PerspectiveCamera_
     Point2i res = film->fullResolution;
     Point3f pMin = RasterToCamera(Point3f(0, 0, 0));
@@ -92,14 +96,14 @@ Float PerspectiveCamera::GenerateRay(const CameraSample &sample,
     return 1;
 }
 
-Float PerspectiveCamera::GenerateRayDifferential(const CameraSample &sample,
-                                                 RayDifferential *ray) const {
+Float PerspectiveCamera::GenerateRayCone(const CameraSample &sample,
+                                         RayCone *ray) const {
     ProfilePhase prof(Prof::GenerateCameraRay);
     // Compute raster and camera sample positions
     Point3f pFilm = Point3f(sample.pFilm.x, sample.pFilm.y, 0);
     Point3f pCamera = RasterToCamera(pFilm);
     Vector3f dir = Normalize(Vector3f(pCamera.x, pCamera.y, pCamera.z));
-    *ray = RayDifferential(Point3f(0, 0, 0), dir);
+    *ray = RayCone(Point3f(0, 0, 0), dir);
     // Modify ray for depth of field
     if (lensRadius > 0) {
         // Sample point on lens
@@ -114,32 +118,11 @@ Float PerspectiveCamera::GenerateRayDifferential(const CameraSample &sample,
         ray->d = Normalize(pFocus - ray->o);
     }
 
-    // Compute offset rays for _PerspectiveCamera_ ray differentials
-    if (lensRadius > 0) {
-        // Compute _PerspectiveCamera_ ray differentials accounting for lens
-
-        // Sample point on lens
-        Point2f pLens = lensRadius * ConcentricSampleDisk(sample.pLens);
-        Vector3f dx = Normalize(Vector3f(pCamera + dxCamera));
-        Float ft = focalDistance / dx.z;
-        Point3f pFocus = Point3f(0, 0, 0) + (ft * dx);
-        ray->rxOrigin = Point3f(pLens.x, pLens.y, 0);
-        ray->rxDirection = Normalize(pFocus - ray->rxOrigin);
-
-        Vector3f dy = Normalize(Vector3f(pCamera + dyCamera));
-        ft = focalDistance / dy.z;
-        pFocus = Point3f(0, 0, 0) + (ft * dy);
-        ray->ryOrigin = Point3f(pLens.x, pLens.y, 0);
-        ray->ryDirection = Normalize(pFocus - ray->ryOrigin);
-    } else {
-        ray->rxOrigin = ray->ryOrigin = ray->o;
-        ray->rxDirection = Normalize(Vector3f(pCamera) + dxCamera);
-        ray->ryDirection = Normalize(Vector3f(pCamera) + dyCamera);
-    }
     ray->time = Lerp(sample.time, shutterOpen, shutterClose);
     ray->medium = medium;
+    ray->radius = 0;
+    ray->spread = pixelSpreadAngle;
     *ray = CameraToWorld(*ray);
-    ray->hasDifferentials = true;
     return 1;
 }
 

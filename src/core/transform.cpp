@@ -1180,7 +1180,7 @@ Ray AnimatedTransform::operator()(const Ray &r) const {
     }
 }
 
-RayDifferential AnimatedTransform::operator()(const RayDifferential &r) const {
+RayCone AnimatedTransform::operator()(const RayCone &r) const {
     if (!actuallyAnimated || r.time <= startTime)
         return (*startTransform)(r);
     else if (r.time >= endTime)

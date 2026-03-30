@@ -170,7 +170,7 @@ class Transform {
     template <typename T>
     inline Normal3<T> operator()(const Normal3<T> &) const;
     inline Ray operator()(const Ray &r) const;
-    inline RayDifferential operator()(const RayDifferential &r) const;
+    inline RayCone operator()(const RayCone &r) const;
     Bounds3f operator()(const Bounds3f &b) const;
     Transform operator*(const Transform &t2) const;
     bool SwapsHandedness() const;
@@ -263,14 +263,11 @@ inline Ray Transform::operator()(const Ray &r) const {
     return Ray(o, d, tMax, r.time, r.medium);
 }
 
-inline RayDifferential Transform::operator()(const RayDifferential &r) const {
+inline RayCone Transform::operator()(const RayCone &r) const {
     Ray tr = (*this)(Ray(r));
-    RayDifferential ret(tr.o, tr.d, tr.tMax, tr.time, tr.medium);
-    ret.hasDifferentials = r.hasDifferentials;
-    ret.rxOrigin = (*this)(r.rxOrigin);
-    ret.ryOrigin = (*this)(r.ryOrigin);
-    ret.rxDirection = (*this)(r.rxDirection);
-    ret.ryDirection = (*this)(r.ryDirection);
+    RayCone ret(tr.o, tr.d, tr.tMax, tr.time, tr.medium);
+    ret.radius = r.radius;
+    ret.spread = r.spread;
     return ret;
 }
 
@@ -418,7 +415,7 @@ class AnimatedTransform {
                           Matrix4x4 *S);
     void Interpolate(Float time, Transform *t) const;
     Ray operator()(const Ray &r) const;
-    RayDifferential operator()(const RayDifferential &r) const;
+    RayCone operator()(const RayCone &r) const;
     Point3f operator()(Float time, const Point3f &p) const;
     Vector3f operator()(Float time, const Vector3f &v) const;
     bool HasScale() const {

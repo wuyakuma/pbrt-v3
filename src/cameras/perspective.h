@@ -54,8 +54,8 @@ class PerspectiveCamera : public ProjectiveCamera {
                       Float shutterClose, Float lensRadius, Float focalDistance,
                       Float fov, Film *film, const Medium *medium);
     Float GenerateRay(const CameraSample &sample, Ray *) const;
-    Float GenerateRayDifferential(const CameraSample &sample,
-                                  RayDifferential *ray) const;
+    Float GenerateRayCone(const CameraSample &sample,
+                          RayCone *ray) const;
     Spectrum We(const Ray &ray, Point2f *pRaster2 = nullptr) const;
     void Pdf_We(const Ray &ray, Float *pdfPos, Float *pdfDir) const;
     Spectrum Sample_Wi(const Interaction &ref, const Point2f &sample,
@@ -66,6 +66,7 @@ class PerspectiveCamera : public ProjectiveCamera {
     // PerspectiveCamera Private Data
     Vector3f dxCamera, dyCamera;
     Float A;
+    Float pixelSpreadAngle;
 };
 
 PerspectiveCamera *CreatePerspectiveCamera(const ParamSet &params,

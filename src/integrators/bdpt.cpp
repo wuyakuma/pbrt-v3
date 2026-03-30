@@ -47,7 +47,7 @@ STAT_PERCENT("Integrator/Zero-radiance paths", zeroRadiancePaths, totalPaths);
 STAT_INT_DISTRIBUTION("Integrator/Path length", pathLength);
 
 // BDPT Forward Declarations
-int RandomWalk(const Scene &scene, RayDifferential ray, Sampler &sampler,
+int RandomWalk(const Scene &scene, RayCone ray, Sampler &sampler,
                MemoryArena &arena, Spectrum beta, Float pdf, int maxDepth,
                TransportMode mode, Vertex *path);
 
@@ -77,9 +77,9 @@ int GenerateCameraSubpath(const Scene &scene, Sampler &sampler,
     cameraSample.pFilm = pFilm;
     cameraSample.time = sampler.Get1D();
     cameraSample.pLens = sampler.Get2D();
-    RayDifferential ray;
-    Spectrum beta = camera.GenerateRayDifferential(cameraSample, &ray);
-    ray.ScaleDifferentials(1 / std::sqrt(sampler.samplesPerPixel));
+    RayCone ray;
+    Spectrum beta = camera.GenerateRayCone(cameraSample, &ray);
+    ray.ScaleSpread(1 / std::sqrt(sampler.samplesPerPixel));
 
     // Generate first vertex on camera subpath and start random walk
     Float pdfPos, pdfDir;
@@ -103,7 +103,7 @@ int GenerateLightSubpath(
     Float lightPdf;
     int lightNum = lightDistr.SampleDiscrete(sampler.Get1D(), &lightPdf);
     const std::shared_ptr<Light> &light = scene.lights[lightNum];
-    RayDifferential ray;
+    RayCone ray;
     Normal3f nLight;
     Float pdfPos, pdfDir;
     Spectrum Le = light->Sample_Le(sampler.Get2D(), sampler.Get2D(), time, &ray,
@@ -136,7 +136,7 @@ int GenerateLightSubpath(
     return nVertices + 1;
 }
 
-int RandomWalk(const Scene &scene, RayDifferential ray, Sampler &sampler,
+int RandomWalk(const Scene &scene, RayCone ray, Sampler &sampler,
                MemoryArena &arena, Spectrum beta, Float pdf, int maxDepth,
                TransportMode mode, Vertex *path) {
     if (maxDepth == 0) return 0;
@@ -163,7 +163,12 @@ int RandomWalk(const Scene &scene, RayDifferential ray, Sampler &sampler,
             // Sample direction and compute reverse density at preceding vertex
             Vector3f wi;
             pdfFwd = pdfRev = mi.phase->Sample_p(-ray.d, &wi, sampler.Get2D());
+            Float miDist = Distance(ray.o, mi.p);
+            Float miRadius = ray.FootprintAt(miDist);
+            Float miSpread = std::max(ray.spread, Float(0.15));
             ray = mi.SpawnRay(wi);
+            ray.radius = miRadius;
+            ray.spread = miSpread;
         } else {
             // Handle surface interaction for path generation
             if (!foundIntersection) {
@@ -180,7 +185,10 @@ int RandomWalk(const Scene &scene, RayDifferential ray, Sampler &sampler,
             // boundaries
             isect.ComputeScatteringFunctions(ray, arena, true, mode);
             if (!isect.bsdf) {
+                Float savedRadius = ray.radius, savedSpread = ray.spread;
                 ray = isect.SpawnRay(ray.d);
+                ray.radius = savedRadius;
+                ray.spread = savedSpread;
                 continue;
             }
 
@@ -205,7 +213,13 @@ int RandomWalk(const Scene &scene, RayDifferential ray, Sampler &sampler,
             }
             beta *= CorrectShadingNormal(isect, wo, wi, mode);
             VLOG(2) << "Random walk beta after shading normal correction " << beta;
+            Float hitDist = Distance(ray.o, isect.p);
+            Float newRadius = ray.FootprintAt(hitDist);
+            Float newSpread = (type & BSDF_SPECULAR) ? ray.spread
+                                                      : std::max(ray.spread, Float(0.15));
             ray = isect.SpawnRay(wi);
+            ray.radius = newRadius;
+            ray.spread = newSpread;
         }
 
         // Compute reverse area density at preceding vertex

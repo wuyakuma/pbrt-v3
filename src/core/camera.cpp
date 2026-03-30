@@ -57,42 +57,36 @@ Camera::Camera(const AnimatedTransform &CameraToWorld, Float shutterOpen,
             "the system may crash as a result of this.");
 }
 
-Float Camera::GenerateRayDifferential(const CameraSample &sample,
-                                      RayDifferential *rd) const {
-    Float wt = GenerateRay(sample, rd);
+Float Camera::GenerateRayCone(const CameraSample &sample,
+                              RayCone *rc) const {
+    Float wt = GenerateRay(sample, rc);
     if (wt == 0) return 0;
 
-    // Find camera ray after shifting a fraction of a pixel in the $x$ direction
-    Float wtx;
-    for (Float eps : { .05, -.05 }) {
-        CameraSample sshift = sample;
-        sshift.pFilm.x += eps;
-        Ray rx;
-        wtx = GenerateRay(sshift, &rx);
-        rd->rxOrigin = rd->o + (rx.o - rd->o) / eps;
-        rd->rxDirection = rd->d + (rx.d - rd->d) / eps;
-        if (wtx != 0)
-            break;
+    // Estimate per-pixel angular spread and origin radius via finite
+    // differences of GenerateRay in the x and y film directions.
+    Ray rx, ry;
+    CameraSample sx = sample, sy = sample;
+    sx.pFilm.x += 1;
+    sy.pFilm.y += 1;
+    Float wtx = GenerateRay(sx, &rx);
+    Float wty = GenerateRay(sy, &ry);
+    if (wtx == 0 || wty == 0) {
+        sx.pFilm.x = sample.pFilm.x - 1;
+        sy.pFilm.y = sample.pFilm.y - 1;
+        wtx = GenerateRay(sx, &rx);
+        wty = GenerateRay(sy, &ry);
+        if (wtx == 0 || wty == 0) return 0;
     }
-    if (wtx == 0)
-        return 0;
 
-    // Find camera ray after shifting a fraction of a pixel in the $y$ direction
-    Float wty;
-    for (Float eps : { .05, -.05 }) {
-        CameraSample sshift = sample;
-        sshift.pFilm.y += eps;
-        Ray ry;
-        wty = GenerateRay(sshift, &ry);
-        rd->ryOrigin = rd->o + (ry.o - rd->o) / eps;
-        rd->ryDirection = rd->d + (ry.d - rd->d) / eps;
-        if (wty != 0)
-            break;
-    }
-    if (wty == 0)
-        return 0;
+    Vector3f d0 = Normalize(rc->d);
+    Float spreadX = Cross(d0, Normalize(rx.d)).Length();
+    Float spreadY = Cross(d0, Normalize(ry.d)).Length();
+    rc->spread = std::sqrt(spreadX * spreadY);
 
-    rd->hasDifferentials = true;
+    Float radiusX = Distance(rc->o, rx.o);
+    Float radiusY = Distance(rc->o, ry.o);
+    rc->radius = std::sqrt(radiusX * radiusY);
+
     return wt;
 }
 

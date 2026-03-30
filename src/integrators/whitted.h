@@ -53,7 +53,7 @@ class WhittedIntegrator : public SamplerIntegrator {
                       std::shared_ptr<Sampler> sampler,
                       const Bounds2i &pixelBounds)
         : SamplerIntegrator(camera, sampler, pixelBounds), maxDepth(maxDepth) {}
-    Spectrum Li(const RayDifferential &ray, const Scene &scene,
+    Spectrum Li(const RayCone &ray, const Scene &scene,
                 Sampler &sampler, MemoryArena &arena, int depth) const;
 
   private:

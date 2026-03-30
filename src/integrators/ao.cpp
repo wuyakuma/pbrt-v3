@@ -54,12 +54,12 @@ AOIntegrator::AOIntegrator(bool cosSample, int ns,
     sampler->Request2DArray(nSamples);
 }
 
-Spectrum AOIntegrator::Li(const RayDifferential &r, const Scene &scene,
+Spectrum AOIntegrator::Li(const RayCone &r, const Scene &scene,
                           Sampler &sampler, MemoryArena &arena,
                           int depth) const {
     ProfilePhase p(Prof::SamplerIntegratorLi);
     Spectrum L(0.f);
-    RayDifferential ray(r);
+    RayCone ray(r);
 
     // Intersect _ray_ with scene and store intersection in _isect_
     SurfaceInteraction isect;

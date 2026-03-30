@@ -155,12 +155,12 @@ void SPPMIntegrator::Render(const Scene &scene) {
                     // Generate camera ray for pixel for SPPM
                     CameraSample cameraSample =
                         tileSampler->GetCameraSample(pPixel);
-                    RayDifferential ray;
+                    RayCone ray;
                     Spectrum beta =
-                        camera->GenerateRayDifferential(cameraSample, &ray);
+                        camera->GenerateRayCone(cameraSample, &ray);
                     if (beta.IsBlack())
                         continue;
-                    ray.ScaleDifferentials(invSqrtSPP);
+                    ray.ScaleSpread(invSqrtSPP);
 
                     // Follow camera ray path until a visible point is created
 
@@ -186,7 +186,10 @@ void SPPMIntegrator::Render(const Scene &scene) {
                         // Compute BSDF at SPPM camera ray intersection
                         isect.ComputeScatteringFunctions(ray, arena, true);
                         if (!isect.bsdf) {
+                            Float savedRadius = ray.radius, savedSpread = ray.spread;
                             ray = isect.SpawnRay(ray.d);
+                            ray.radius = savedRadius;
+                            ray.spread = savedSpread;
                             --depth;
                             continue;
                         }
@@ -230,7 +233,14 @@ void SPPMIntegrator::Render(const Scene &scene) {
                                 if (tileSampler->Get1D() > continueProb) break;
                                 beta /= continueProb;
                             }
-                            ray = (RayDifferential)isect.SpawnRay(wi);
+                            Float hitDist = Distance(ray.o, isect.p);
+                            Float newRadius = ray.FootprintAt(hitDist);
+                            Float newSpread = specularBounce
+                                ? ray.spread
+                                : std::max(ray.spread, Float(0.15));
+                            ray = (RayCone)isect.SpawnRay(wi);
+                            ray.radius = newRadius;
+                            ray.spread = newSpread;
                         }
                     }
                 }
@@ -330,7 +340,7 @@ void SPPMIntegrator::Render(const Scene &scene) {
                 haltonDim += 5;
 
                 // Generate _photonRay_ from light source and initialize _beta_
-                RayDifferential photonRay;
+                RayCone photonRay;
                 Normal3f nLight;
                 Float pdfPos, pdfDir;
                 Spectrum Le =
@@ -381,7 +391,10 @@ void SPPMIntegrator::Render(const Scene &scene) {
                                                      TransportMode::Importance);
                     if (!isect.bsdf) {
                         --depth;
+                        Float savedRadius = photonRay.radius, savedSpread = photonRay.spread;
                         photonRay = isect.SpawnRay(photonRay.d);
+                        photonRay.radius = savedRadius;
+                        photonRay.spread = savedSpread;
                         continue;
                     }
                     const BSDF &photonBSDF = *isect.bsdf;
@@ -406,7 +419,14 @@ void SPPMIntegrator::Render(const Scene &scene) {
                     Float q = std::max((Float)0, 1 - bnew.y() / beta.y());
                     if (RadicalInverse(haltonDim++, haltonIndex) < q) break;
                     beta = bnew / (1 - q);
-                    photonRay = (RayDifferential)isect.SpawnRay(wi);
+                    Float hitDist = Distance(photonRay.o, isect.p);
+                    Float newRadius = photonRay.FootprintAt(hitDist);
+                    Float newSpread = (flags & BSDF_SPECULAR)
+                        ? photonRay.spread
+                        : std::max(photonRay.spread, Float(0.15));
+                    photonRay = isect.SpawnRay(wi);
+                    photonRay.radius = newRadius;
+                    photonRay.spread = newSpread;
                 }
                 arena.Reset();
             }, photonsPerIteration, 8192);

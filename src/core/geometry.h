@@ -889,40 +889,35 @@ class Ray {
     const Medium *medium;
 };
 
-class RayDifferential : public Ray {
+// RayCone: replaces RayDifferential with the ray cone approach from
+// Ray Tracing Gems 2 / OSL testrender. A cone is characterized by its
+// radius (footprint at the ray origin) and spread (angular divergence
+// rate in radians per unit distance). The footprint at distance t is
+// |radius| + |spread| * t.
+class RayCone : public Ray {
   public:
-    // RayDifferential Public Methods
-    RayDifferential() { hasDifferentials = false; }
-    RayDifferential(const Point3f &o, const Vector3f &d, Float tMax = Infinity,
-                    Float time = 0.f, const Medium *medium = nullptr)
-        : Ray(o, d, tMax, time, medium) {
-        hasDifferentials = false;
-    }
-    RayDifferential(const Ray &ray) : Ray(ray) { hasDifferentials = false; }
+    RayCone() : radius(0), spread(0) {}
+    RayCone(const Point3f &o, const Vector3f &d, Float tMax = Infinity,
+            Float time = 0.f, const Medium *medium = nullptr)
+        : Ray(o, d, tMax, time, medium), radius(0), spread(0) {}
+    RayCone(const Ray &ray) : Ray(ray), radius(0), spread(0) {}
     bool HasNaNs() const {
-        return Ray::HasNaNs() ||
-               (hasDifferentials &&
-                (rxOrigin.HasNaNs() || ryOrigin.HasNaNs() ||
-                 rxDirection.HasNaNs() || ryDirection.HasNaNs()));
+        return Ray::HasNaNs() || isNaN(radius) || isNaN(spread);
     }
-    void ScaleDifferentials(Float s) {
-        rxOrigin = o + (rxOrigin - o) * s;
-        ryOrigin = o + (ryOrigin - o) * s;
-        rxDirection = d + (rxDirection - d) * s;
-        ryDirection = d + (ryDirection - d) * s;
+    Float FootprintAt(Float t) const {
+        return std::abs(radius) + std::abs(spread) * t;
     }
-    friend std::ostream &operator<<(std::ostream &os, const RayDifferential &r) {
-        os << "[ " << (Ray &)r << " has differentials: " <<
-            (r.hasDifferentials ? "true" : "false") << ", xo = " << r.rxOrigin <<
-            ", xd = " << r.rxDirection << ", yo = " << r.ryOrigin << ", yd = " <<
-            r.ryDirection << " ]";
+    void ScaleSpread(Float s) {
+        radius *= s;
+        spread *= s;
+    }
+    friend std::ostream &operator<<(std::ostream &os, const RayCone &r) {
+        os << "[ " << (const Ray &)r
+           << ", radius=" << r.radius << ", spread=" << r.spread << " ]";
         return os;
     }
 
-    // RayDifferential Public Data
-    bool hasDifferentials;
-    Point3f rxOrigin, ryOrigin;
-    Vector3f rxDirection, ryDirection;
+    Float radius, spread;
 };
 
 // Geometry Inline Functions

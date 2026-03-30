@@ -54,8 +54,8 @@ class Camera {
            Float shutterClose, Film *film, const Medium *medium);
     virtual ~Camera();
     virtual Float GenerateRay(const CameraSample &sample, Ray *ray) const = 0;
-    virtual Float GenerateRayDifferential(const CameraSample &sample,
-                                          RayDifferential *rd) const;
+    virtual Float GenerateRayCone(const CameraSample &sample,
+                                   RayCone *rc) const;
     virtual Spectrum We(const Ray &ray, Point2f *pRaster2 = nullptr) const;
     virtual void Pdf_We(const Ray &ray, Float *pdfPos, Float *pdfDir) const;
     virtual Spectrum Sample_Wi(const Interaction &ref, const Point2f &u,

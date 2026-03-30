@@ -1,0 +1,121 @@
+# ==============================================================================
+# PBRT v3 Scene: Ray Differential & Texture Filtering Stress Test
+# ==============================================================================
+
+# 1. Camera & View Setup
+# The camera looks at a downward grazing angle across a vast floor. 
+# This grazing angle is the classic test for ray differentials because the 
+# ray footprint (pixel area) becomes highly elongated (anisotropic) in the distance.
+LookAt 0 2.5 -5    # Eye position
+       0 0.5 5     # Look-at point
+       0 1 0       # Up vector
+
+Camera "perspective" "float fov" [ 50 ]
+
+# Keep pixel samples relatively low so aliasing/filtering is obvious
+Sampler "halton" "integer pixelsamples" [ 256 ]
+
+Integrator "path" "integer maxdepth" [ 6 ]
+
+Film "image" 
+     "string filename" [ "raydiff_test.png" ]
+     "integer xresolution"[ 1024 ] 
+     "integer yresolution" [ 960 ]
+
+WorldBegin
+
+# ==============================================================================
+# Lighting
+# ==============================================================================
+# Uniform ambient/sky light to easily see texture details everywhere
+LightSource "infinite" "rgb L" [ 0.8 0.8 0.8 ]
+
+# A directional light to provide shadows and geometric form
+LightSource "distant" 
+    "point from"[ -5 10 -5 ] 
+    "point to" [ 0 0 0 ] 
+    "rgb L" [ 1.2 1.2 1.2 ]
+
+# ==============================================================================
+# Textures
+# ==============================================================================
+# Define solid colors to feed into the checkerboard
+Texture "colorWhite" "spectrum" "constant" "spectrum value"[ 0.9 0.9 0.9 ]
+Texture "colorBlack" "spectrum" "constant" "spectrum value"[ 0.02 0.02 0.02 ]
+Texture "colorBlue"  "spectrum" "constant" "spectrum value" [ 0.1 0.1 0.8 ]
+Texture "colorRed"   "spectrum" "constant" "spectrum value"[ 0.8 0.1 0.1 ]
+
+# Floor Checkerboard:
+# High frequency scaling ensures that in the distance, the texture frequency 
+# exceeds pixel sampling frequency. Proper ray differentials will trigger PBRT's 
+# analytical anti-aliasing. Improper differentials will result in severe Moiré patterns.
+Texture "floorChecker" "spectrum" "checkerboard"
+    "float uscale" [ 80 ] "float vscale" [ 80 ]
+    "texture tex1" "colorWhite"
+    "texture tex2" "colorBlack"
+
+# Sphere Dots:
+# A secondary high-frequency texture mapped to a curved surface.
+Texture "sphereDots" "spectrum" "dots"
+    "float uscale" [ 20 ] "float vscale" [ 20 ]
+    "texture inside" "colorRed"
+    "texture outside" "colorWhite"
+
+# NOTE ON IMAGE MAPS: 
+# If you want to test EWA vs Trilinear filtering, replace the floor material's 
+# Kd texture with an imagemap like this (requires providing your own grid image):
+#
+# Texture "floorImage" "spectrum" "imagemap"
+#     "string filename" [ "my_grid_texture.png" ]
+#     "string filter" [ "ewa" ] # Try changing to "trilinear", "bilerp", or "point"
+#     "float maxanisotropy" [ 8.0 ]
+#     "float uscale" [ 80 ] "float vscale" [ 80 ]
+
+# ==============================================================================
+# Materials & Geometry
+# ==============================================================================
+
+# 1. THE FLOOR PLANE (Tests grazing angle differentials)
+AttributeBegin
+    Material "matte" "texture Kd" "floorChecker"
+    # A massive quad stretching far into the distance
+    Shape "trianglemesh"
+        "integer indices"[ 0 1 2 0 2 3 ]
+        "point P"[ -100 0 -50   100 0 -50   100 0 200   -100 0 200 ]
+        "float uv"[ 0 0   1 0   1 1   0 1 ]
+AttributeEnd
+
+
+# 2. GLASS SPHERE (Tests ray differentials through REFRACTION)
+# Refracting a ray through a curved surface drastically expands or compresses 
+# the ray's footprint. The floor texture seen *through* the glass sphere should 
+# be filtered differently than the floor seen directly.
+AttributeBegin
+    Translate -1.5 1 2
+    Material "glass" "float index" [ 1.5 ]
+    Shape "sphere" "float radius" [ 1 ]
+AttributeEnd
+
+
+# 3. MIRROR SPHERE (Tests ray differentials through REFLECTION)
+# Similar to the glass sphere, reflecting off a curved convex surface causes 
+# rays to spread apart rapidly. The floor texture in the reflection should blur
+# smoothly if ray differentials are propagating properly.
+AttributeBegin
+    Translate 1.5 1 3
+    Material "mirror"
+    Shape "sphere" "float radius" [ 1 ]
+AttributeEnd
+
+
+# 4. TEXTURED MATTE SPHERE (Tests UV mapping differentials on curved geometry)
+# The dots texture will squish and pinch near the poles of the sphere.
+AttributeBegin
+    Translate 0 1 7
+    Rotate 45 0 1 0
+    Rotate -45 1 0 0
+    Material "matte" "texture Kd" "sphereDots"
+    Shape "sphere" "float radius" [ 1.5 ]
+AttributeEnd
+
+WorldEnd

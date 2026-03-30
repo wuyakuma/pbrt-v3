@@ -52,12 +52,12 @@ void VolPathIntegrator::Preprocess(const Scene &scene, Sampler &sampler) {
         CreateLightSampleDistribution(lightSampleStrategy, scene);
 }
 
-Spectrum VolPathIntegrator::Li(const RayDifferential &r, const Scene &scene,
+Spectrum VolPathIntegrator::Li(const RayCone &r, const Scene &scene,
                                Sampler &sampler, MemoryArena &arena,
                                int depth) const {
     ProfilePhase p(Prof::SamplerIntegratorLi);
     Spectrum L(0.f), beta(1.f);
-    RayDifferential ray(r);
+    RayCone ray(r);
     bool specularBounce = false;
     int bounces;
     // Added after book publication: etaScale tracks the accumulated effect
@@ -93,7 +93,12 @@ Spectrum VolPathIntegrator::Li(const RayDifferential &r, const Scene &scene,
 
             Vector3f wo = -ray.d, wi;
             mi.phase->Sample_p(wo, &wi, sampler.Get2D());
+            Float hitDist = Distance(ray.o, mi.p);
+            Float miRadius = ray.FootprintAt(hitDist);
+            Float miSpread = std::max(ray.spread, Float(0.15));
             ray = mi.SpawnRay(wi);
+            ray.radius = miRadius;
+            ray.spread = miSpread;
             specularBounce = false;
         } else {
             ++surfaceInteractions;
@@ -115,7 +120,10 @@ Spectrum VolPathIntegrator::Li(const RayDifferential &r, const Scene &scene,
             // Compute scattering functions and skip over medium boundaries
             isect.ComputeScatteringFunctions(ray, arena, true);
             if (!isect.bsdf) {
+                Float savedRadius = ray.radius, savedSpread = ray.spread;
                 ray = isect.SpawnRay(ray.d);
+                ray.radius = savedRadius;
+                ray.spread = savedSpread;
                 bounces--;
                 continue;
             }
@@ -145,7 +153,14 @@ Spectrum VolPathIntegrator::Li(const RayDifferential &r, const Scene &scene,
                 etaScale *=
                     (Dot(wo, isect.n) > 0) ? (eta * eta) : 1 / (eta * eta);
             }
+            // Propagate ray cone through bounce
+            Float hitDist = Distance(ray.o, isect.p);
+            Float newRadius = ray.FootprintAt(hitDist);
+            Float newSpread = specularBounce ? ray.spread
+                                             : std::max(ray.spread, Float(0.15));
             ray = isect.SpawnRay(wi);
+            ray.radius = newRadius;
+            ray.spread = newSpread;
 
             // Account for attenuated subsurface scattering, if applicable
             if (isect.bssrdf && (flags & BSDF_TRANSMISSION)) {
@@ -170,7 +185,11 @@ Spectrum VolPathIntegrator::Li(const RayDifferential &r, const Scene &scene,
                 beta *= f * AbsDot(wi, pi.shading.n) / pdf;
                 DCHECK(std::isinf(beta.y()) == false);
                 specularBounce = (flags & BSDF_SPECULAR) != 0;
+                Float bssrdfRadius = ray.radius;
+                Float bssrdfSpread = std::max(ray.spread, Float(0.15));
                 ray = pi.SpawnRay(wi);
+                ray.radius = bssrdfRadius;
+                ray.spread = bssrdfSpread;
             }
         }
 

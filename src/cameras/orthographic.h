@@ -59,14 +59,16 @@ class OrthographicCamera : public ProjectiveCamera {
         // Compute differential changes in origin for orthographic camera rays
         dxCamera = RasterToCamera(Vector3f(1, 0, 0));
         dyCamera = RasterToCamera(Vector3f(0, 1, 0));
+        pixelSpreadRadius = std::sqrt(dxCamera.Length() * dyCamera.Length());
     }
     Float GenerateRay(const CameraSample &sample, Ray *) const;
-    Float GenerateRayDifferential(const CameraSample &sample,
-                                  RayDifferential *) const;
+    Float GenerateRayCone(const CameraSample &sample,
+                          RayCone *) const;
 
   private:
     // OrthographicCamera Private Data
     Vector3f dxCamera, dyCamera;
+    Float pixelSpreadRadius;
 };
 
 OrthographicCamera *CreateOrthographicCamera(const ParamSet &params,

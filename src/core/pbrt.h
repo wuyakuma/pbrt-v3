@@ -107,7 +107,7 @@ class Point2;
 template <typename T>
 class Normal3;
 class Ray;
-class RayDifferential;
+class RayCone;
 template <typename T>
 class Bounds2;
 template <typename T>

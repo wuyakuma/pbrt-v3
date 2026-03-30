@@ -89,7 +89,7 @@ void SurfaceInteraction::SetShadingGeometry(const Vector3f &dpdus,
     shading.dndv = dndvs;
 }
 
-void SurfaceInteraction::ComputeScatteringFunctions(const RayDifferential &ray,
+void SurfaceInteraction::ComputeScatteringFunctions(const RayCone &ray,
                                                     MemoryArena &arena,
                                                     bool allowMultipleLobes,
                                                     TransportMode mode) {
@@ -99,24 +99,34 @@ void SurfaceInteraction::ComputeScatteringFunctions(const RayDifferential &ray,
 }
 
 void SurfaceInteraction::ComputeDifferentials(
-    const RayDifferential &ray) const {
-    if (ray.hasDifferentials) {
-        // Estimate screen space change in $\pt{}$ and $(u,v)$
+    const RayCone &ray) const {
+    // Compute the cone footprint at the intersection point following
+    // the ray cone approach (Ray Tracing Gems 2 / OSL testrender).
+    Float hitDist = Distance(p, ray.o);
+    Float footprint = ray.FootprintAt(hitDist);
 
-        // Compute auxiliary intersection points with plane
-        Float d = Dot(n, Vector3f(p.x, p.y, p.z));
-        Float tx =
-            -(Dot(n, Vector3f(ray.rxOrigin)) - d) / Dot(n, ray.rxDirection);
-        if (std::isinf(tx) || std::isnan(tx)) goto fail;
-        Point3f px = ray.rxOrigin + tx * ray.rxDirection;
-        Float ty =
-            -(Dot(n, Vector3f(ray.ryOrigin)) - d) / Dot(n, ray.ryDirection);
-        if (std::isinf(ty) || std::isnan(ty)) goto fail;
-        Point3f py = ray.ryOrigin + ty * ray.ryDirection;
-        dpdx = px - p;
-        dpdy = py - p;
+    if (footprint > 0) {
+        // Build two orthonormal vectors perpendicular to the ray direction
+        Vector3f dDir = Normalize(ray.d);
+        Vector3f e1, e2;
+        CoordinateSystem(dDir, &e1, &e2);
 
-        // Compute $(u,v)$ offsets at auxiliary points
+        // Scale by footprint to get the raw cone disc derivatives
+        Vector3f rawDx = e1 * footprint;
+        Vector3f rawDy = e2 * footprint;
+
+        // Project derivatives onto the surface tangent plane (following
+        // OSL testrender's project() method)
+        Float cosI = std::abs(Dot(-dDir, Vector3f(n)));
+        if (cosI > 1e-4f) {
+            rawDx += dDir * (Dot(rawDx, Vector3f(n)) / cosI);
+            rawDy += dDir * (Dot(rawDy, Vector3f(n)) / cosI);
+        }
+
+        dpdx = rawDx;
+        dpdy = rawDy;
+
+        // Compute $(u,v)$ offsets from the projected cone footprint
 
         // Choose two dimensions to use for ray offset computation
         int dim[2];
@@ -134,12 +144,11 @@ void SurfaceInteraction::ComputeDifferentials(
         // Initialize _A_, _Bx_, and _By_ matrices for offset computation
         Float A[2][2] = {{dpdu[dim[0]], dpdv[dim[0]]},
                          {dpdu[dim[1]], dpdv[dim[1]]}};
-        Float Bx[2] = {px[dim[0]] - p[dim[0]], px[dim[1]] - p[dim[1]]};
-        Float By[2] = {py[dim[0]] - p[dim[0]], py[dim[1]] - p[dim[1]]};
+        Float Bx[2] = {dpdx[dim[0]], dpdx[dim[1]]};
+        Float By[2] = {dpdy[dim[0]], dpdy[dim[1]]};
         if (!SolveLinearSystem2x2(A, Bx, &dudx, &dvdx)) dudx = dvdx = 0;
         if (!SolveLinearSystem2x2(A, By, &dudy, &dvdy)) dudy = dvdy = 0;
     } else {
-    fail:
         dudx = dvdx = 0;
         dudy = dvdy = 0;
         dpdx = dpdy = Vector3f(0, 0, 0);

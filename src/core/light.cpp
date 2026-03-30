@@ -80,7 +80,7 @@ Spectrum VisibilityTester::Tr(const Scene &scene, Sampler &sampler) const {
     return Tr;
 }
 
-Spectrum Light::Le(const RayDifferential &ray) const { return Spectrum(0.f); }
+Spectrum Light::Le(const RayCone &ray) const { return Spectrum(0.f); }
 
 AreaLight::AreaLight(const Transform &LightToWorld, const MediumInterface &medium,
                      int nSamples)

@@ -59,7 +59,7 @@ void DirectLightingIntegrator::Preprocess(const Scene &scene,
     }
 }
 
-Spectrum DirectLightingIntegrator::Li(const RayDifferential &ray,
+Spectrum DirectLightingIntegrator::Li(const RayCone &ray,
                                       const Scene &scene, Sampler &sampler,
                                       MemoryArena &arena, int depth) const {
     ProfilePhase p(Prof::SamplerIntegratorLi);
@@ -73,8 +73,12 @@ Spectrum DirectLightingIntegrator::Li(const RayDifferential &ray,
 
     // Compute scattering functions for surface interaction
     isect.ComputeScatteringFunctions(ray, arena);
-    if (!isect.bsdf)
-        return Li(isect.SpawnRay(ray.d), scene, sampler, arena, depth);
+    if (!isect.bsdf) {
+        RayCone continuedRay = isect.SpawnRay(ray.d);
+        continuedRay.radius = ray.radius;
+        continuedRay.spread = ray.spread;
+        return Li(continuedRay, scene, sampler, arena, depth);
+    }
     Vector3f wo = isect.wo;
     // Compute emitted light if ray hit an area light source
     L += isect.Le(wo);

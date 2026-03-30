@@ -70,7 +70,7 @@ class Light {
                                VisibilityTester *vis) const = 0;
     virtual Spectrum Power() const = 0;
     virtual void Preprocess(const Scene &scene) {}
-    virtual Spectrum Le(const RayDifferential &r) const;
+    virtual Spectrum Le(const RayCone &r) const;
     virtual Float Pdf_Li(const Interaction &ref, const Vector3f &wi) const = 0;
     virtual Spectrum Sample_Le(const Point2f &u1, const Point2f &u2, Float time,
                                Ray *ray, Normal3f *nLight, Float *pdfPos,
