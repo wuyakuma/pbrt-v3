@@ -1,0 +1,20 @@
+{
+  "closure-basic": {
+    "scene": "scenes/osl/closure-basic.pbrt",
+    "reference_exr": "closure-basic.ref.exr",
+    "reference_png": "closure-basic.ref.png",
+    "outputs": [
+      "closure-basic.exr",
+      "closure-basic.png"
+    ]
+  },
+  "groupspec-basic": {
+    "scene": "scenes/osl/groupspec-basic.pbrt",
+    "reference_exr": "groupspec-basic.ref.exr",
+    "reference_png": "groupspec-basic.ref.png",
+    "outputs": [
+      "groupspec-basic.exr",
+      "groupspec-basic.png"
+    ]
+  }
+}

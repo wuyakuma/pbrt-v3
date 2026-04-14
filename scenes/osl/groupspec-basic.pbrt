@@ -1,0 +1,42 @@
+# OSL groupspec regression scene.
+# Verifies groupspec contract and output fallback wiring.
+
+LookAt 0 1.6 4   0 0.6 0   0 1 0
+Camera "perspective" "float fov" [45]
+Film "image"
+    "integer xresolution" [640]
+    "integer yresolution" [360]
+    "string filename" "groupspec-basic.exr"
+Sampler "halton" "integer pixelsamples" [16]
+Integrator "path"
+
+WorldBegin
+
+AttributeBegin
+    AreaLightSource "area" "color L" [12 12 12]
+    Translate -0.8 2.2 -0.5
+    Shape "sphere" "float radius" [0.3]
+AttributeEnd
+
+Texture "groupspec_color" "spectrum" "osl"
+    "string groupspec" ["shader uv_debug uv_layer"]
+    "string group" ["groupspec_color_group"]
+    "string output" ["uvcolor"]
+    "rgb defaultcolor" [0.6 0.6 0.6]
+
+Texture "groupspec_roughness" "float" "osl"
+    "string groupspec" ["shader uv_debug uv_layer"]
+    "string group" ["groupspec_roughness_group"]
+    "string output" ["u"]
+    "float default" [0.25]
+
+AttributeBegin
+    Material "osl"
+        "string groupspec" ["shader uv_debug uv_layer"]
+        "string group" ["groupspec_material_group"]
+        "texture base_color" ["groupspec_color"]
+        "texture roughness" ["groupspec_roughness"]
+    Shape "sphere" "float radius" [1.0]
+AttributeEnd
+
+WorldEnd

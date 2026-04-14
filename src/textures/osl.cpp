@@ -33,10 +33,15 @@
 #include "textures/osl.h"
 
 #include "interaction.h"
+#include "shape.h"
 
 #include <atomic>
+#include <cstdarg>
+#include <cstdlib>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 
 #ifdef PBRT_ENABLE_OSL
 #include <OSL/genclosure.h>
@@ -50,21 +55,73 @@ namespace {
 std::atomic<bool> gMissingShaderWarned(false);
 std::atomic<bool> gMissingOutputWarned(false);
 std::atomic<bool> gOSLDisabledWarned(false);
+std::atomic<bool> gGroupspecWithShaderWarned(false);
+std::atomic<bool> gInvalidConfigWarned(false);
+std::atomic<bool> gUnsupportedRendererCallWarned(false);
 
-void WarnIfMissingShader(const OSLShaderConfig &config) {
-    if (!config.shader.empty() || !config.groupSpec.empty()) return;
-    if (!gMissingShaderWarned.exchange(true))
-        Warning("OSL entry requires \"shader\" or \"groupspec\".");
+bool OSLDebugEnabled() {
+    static bool enabled = (std::getenv("PBRT_OSL_DEBUG") != nullptr);
+    return enabled;
 }
+
+void OSLLog(const char *fmt, ...) {
+    if (!OSLDebugEnabled()) return;
+    va_list args;
+    va_start(args, fmt);
+    std::string msg = StringVaprintf(fmt, args);
+    va_end(args);
+    Warning("[OSL][debug] %s", msg.c_str());
+}
+
+bool WarnUnsupportedRendererCall(const char *what) {
+    if (!gUnsupportedRendererCallWarned.exchange(true))
+        Warning("[OSL][renderer] Unsupported renderer callback: %s", what);
+    return false;
+}
+
+bool IsEmpty(const std::string &s) { return s.empty(); }
 
 #ifndef PBRT_ENABLE_OSL
 void WarnIfOSLDisabled() {
     if (!gOSLDisabledWarned.exchange(true))
-        Warning("OSL support is disabled. Reconfigure with PBRT_ENABLE_OSL=ON.");
+        Warning("[OSL] OSL support is disabled. Configure with PBRT_ENABLE_OSL=ON.");
 }
 #endif
 
+}  // namespace
+
+bool ValidateAndNormalizeOSLShaderConfig(OSLShaderConfig *config,
+                                         const char *ownerLabel) {
+    if (!config) return false;
+    if (IsEmpty(config->outputName)) config->outputName = "result";
+    if (!IsEmpty(config->shader) && !IsEmpty(config->groupSpec) &&
+        !gGroupspecWithShaderWarned.exchange(true)) {
+        Warning(
+            "[OSL][contract] %s provides both \"shader\" and \"groupspec\"; "
+            "using groupspec and ignoring shader.",
+            ownerLabel ? ownerLabel : "osl");
+        config->shader.clear();
+    }
+    if (!IsEmpty(config->layer) && IsEmpty(config->shader) &&
+        IsEmpty(config->groupSpec)) {
+        if (!gInvalidConfigWarned.exchange(true))
+            Warning(
+                "[OSL][contract] %s sets \"layer\" but missing \"shader\" and "
+                "\"groupspec\".",
+                ownerLabel ? ownerLabel : "osl");
+        return false;
+    }
+    if (IsEmpty(config->shader) && IsEmpty(config->groupSpec)) {
+        if (!gMissingShaderWarned.exchange(true))
+            Warning("[OSL][contract] %s requires \"shader\" or \"groupspec\".",
+                    ownerLabel ? ownerLabel : "osl");
+        return false;
+    }
+    return true;
+}
+
 #ifdef PBRT_ENABLE_OSL
+namespace {
 
 enum ClosureIDs {
     EMISSION_ID = 1,
@@ -119,108 +176,199 @@ struct ConductorBsdfParams {
     OSL::ustringhash distribution;
 };
 
+struct OSLRenderState {
+    const SurfaceInteraction *si = nullptr;
+};
+
+struct OSLRuntimeCountersAtomic {
+    std::atomic<uint64_t> executions{0};
+    std::atomic<uint64_t> groupCacheHits{0};
+    std::atomic<uint64_t> groupCacheMisses{0};
+    std::atomic<uint64_t> symbolCacheHits{0};
+    std::atomic<uint64_t> symbolCacheMisses{0};
+    std::atomic<uint64_t> executeFailures{0};
+    std::atomic<uint64_t> fallbackCount{0};
+};
+
+OSLRuntimeCountersAtomic gCounters;
+
+struct ThreadResources {
+    OSL::PerThreadInfo *threadInfo = nullptr;
+    OSL::ShadingContext *context = nullptr;
+};
+
 class PbrtOSLRendererServices : public OSL::RendererServices {
   public:
     PbrtOSLRendererServices() : OSL::RendererServices(nullptr) {}
 
     bool get_matrix(OSL::ShaderGlobals *sg, OSL::Matrix44 &result,
                     OSL::TransformationPtr xform, float time) override {
-        result.makeIdentity();
-        return true;
+        return SetMatrixFromTransformPtr(result, xform, false);
     }
 
     bool get_matrix(OSL::ShaderGlobals *sg, OSL::Matrix44 &result,
                     OSL::TransformationPtr xform) override {
-        result.makeIdentity();
-        return true;
-    }
-
-    bool get_matrix(OSL::ShaderGlobals *sg, OSL::Matrix44 &result,
-                    OSL::ustringhash from, float time) override {
-        result.makeIdentity();
-        return true;
-    }
-
-    bool get_matrix(OSL::ShaderGlobals *sg, OSL::Matrix44 &result,
-                    OSL::ustringhash from) override {
-        result.makeIdentity();
-        return true;
+        return SetMatrixFromTransformPtr(result, xform, false);
     }
 
     bool get_inverse_matrix(OSL::ShaderGlobals *sg, OSL::Matrix44 &result,
                             OSL::TransformationPtr xform,
                             float time) override {
-        result.makeIdentity();
-        return true;
+        return SetMatrixFromTransformPtr(result, xform, true);
     }
 
     bool get_inverse_matrix(OSL::ShaderGlobals *sg, OSL::Matrix44 &result,
                             OSL::TransformationPtr xform) override {
-        result.makeIdentity();
-        return true;
+        return SetMatrixFromTransformPtr(result, xform, true);
+    }
+
+    bool get_matrix(OSL::ShaderGlobals *sg, OSL::Matrix44 &result,
+                    OSL::ustringhash from, float time) override {
+        if (from == OSL::ustringhash("common") || from == OSL::ustringhash(""))
+            return SetIdentity(result);
+        if (from == OSL::ustringhash("object"))
+            return SetMatrixFromTransformPtr(result, sg->object2common, false);
+        if (from == OSL::ustringhash("shader"))
+            return SetMatrixFromTransformPtr(result, sg->shader2common, false);
+        return WarnUnsupportedRendererCall("get_matrix(from)");
+    }
+
+    bool get_matrix(OSL::ShaderGlobals *sg, OSL::Matrix44 &result,
+                    OSL::ustringhash from) override {
+        return get_matrix(sg, result, from, sg ? sg->time : 0.f);
     }
 
     bool get_inverse_matrix(OSL::ShaderGlobals *sg, OSL::Matrix44 &result,
                             OSL::ustringhash to, float time) override {
-        result.makeIdentity();
-        return true;
+        if (to == OSL::ustringhash("common") || to == OSL::ustringhash(""))
+            return SetIdentity(result);
+        if (to == OSL::ustringhash("object"))
+            return SetMatrixFromTransformPtr(result, sg->object2common, true);
+        if (to == OSL::ustringhash("shader"))
+            return SetMatrixFromTransformPtr(result, sg->shader2common, true);
+        return WarnUnsupportedRendererCall("get_inverse_matrix(to)");
     }
 
     bool get_inverse_matrix(OSL::ShaderGlobals *sg, OSL::Matrix44 &result,
                             OSL::ustringhash to) override {
+        return get_inverse_matrix(sg, result, to, sg ? sg->time : 0.f);
+    }
+
+    bool get_userdata(bool derivatives, OSL::ustringhash name, OSL::TypeDesc type,
+                      OSL::ShaderGlobals *sg, void *val) override {
+        if (!sg || !val) return false;
+        const OSLRenderState *rs = reinterpret_cast<const OSLRenderState *>(sg->renderstate);
+        if (!rs || !rs->si) return false;
+        const SurfaceInteraction &si = *rs->si;
+        if (type == OSL::TypeFloat && name == OSL::ustringhash("u")) {
+            *reinterpret_cast<float *>(val) = si.uv.x;
+            return true;
+        }
+        if (type == OSL::TypeFloat && name == OSL::ustringhash("v")) {
+            *reinterpret_cast<float *>(val) = si.uv.y;
+            return true;
+        }
+        if (type == OSL::TypeVector && name == OSL::ustringhash("N")) {
+            float *v = reinterpret_cast<float *>(val);
+            v[0] = si.shading.n.x;
+            v[1] = si.shading.n.y;
+            v[2] = si.shading.n.z;
+            return true;
+        }
+        if (type == OSL::TypePoint && name == OSL::ustringhash("P")) {
+            float *v = reinterpret_cast<float *>(val);
+            v[0] = si.p.x;
+            v[1] = si.p.y;
+            v[2] = si.p.z;
+            return true;
+        }
+        return false;
+    }
+
+    bool get_attribute(OSL::ShaderGlobals *sg, bool derivatives,
+                       OSL::ustringhash object, OSL::TypeDesc type,
+                       OSL::ustringhash name, void *val) override {
+        return get_userdata(derivatives, name, type, sg, val);
+    }
+
+  private:
+    static bool SetIdentity(OSL::Matrix44 &result) {
         result.makeIdentity();
+        return true;
+    }
+
+    static bool SetMatrixFromTransformPtr(OSL::Matrix44 &result,
+                                          OSL::TransformationPtr xform,
+                                          bool inverse) {
+        if (!xform) return SetIdentity(result);
+        const Transform *t = reinterpret_cast<const Transform *>(xform);
+        const Matrix4x4 &m = inverse ? t->GetInverseMatrix() : t->GetMatrix();
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j) result[i][j] = m.m[i][j];
         return true;
     }
 };
 
-struct OSLRuntime {
-    OSLRuntime() : renderer(new PbrtOSLRendererServices()), ss(new OSL::ShadingSystem(renderer.get(), nullptr, nullptr)) {
+class OSLRuntime {
+  public:
+    OSLRuntime()
+        : renderer(new PbrtOSLRendererServices()),
+          ss(new OSL::ShadingSystem(renderer.get(), nullptr, nullptr)) {
         RegisterClosures();
     }
 
+    ~OSLRuntime() {
+        std::lock_guard<std::mutex> lock(threadMutex);
+        for (auto &kv : threadData) {
+            if (kv.second.context) ss->release_context(kv.second.context);
+            if (kv.second.threadInfo) ss->destroy_thread_info(kv.second.threadInfo);
+        }
+        threadData.clear();
+    }
+
     OSL::ShadingContext *GetContext() {
-        if (!tlsThreadInfo) tlsThreadInfo = ss->create_thread_info();
-        if (!tlsShadingContext) tlsShadingContext = ss->get_context(tlsThreadInfo);
-        return tlsShadingContext;
+        const auto tid = std::this_thread::get_id();
+        std::lock_guard<std::mutex> lock(threadMutex);
+        ThreadResources &res = threadData[tid];
+        if (!res.threadInfo) res.threadInfo = ss->create_thread_info();
+        if (!res.context) res.context = ss->get_context(res.threadInfo);
+        return res.context;
     }
 
     OSL::ShaderGroupRef ResolveGroup(const OSLShaderConfig &config) {
-        const std::string key =
-            config.shader + "|" + config.group + "|" + config.layer + "|" +
-            config.groupSpec + "|" + config.outputName;
+        const std::string key = config.shader + "|" + config.group + "|" +
+                                config.layer + "|" + config.groupSpec;
         std::lock_guard<std::mutex> lock(cacheMutex);
         auto iter = groups.find(key);
-        if (iter != groups.end()) return iter->second;
-
-        const std::string groupName =
-            config.group.empty() ? (config.shader.empty() ? "pbrt_osl_group" : config.shader)
-                                 : config.group;
-        OSL::ShaderGroupRef groupRef;
-        if (!config.groupSpec.empty()) {
-            groupRef = ss->ShaderGroupBegin(groupName, "surface", config.groupSpec);
-            if (!groupRef) return OSL::ShaderGroupRef();
-            ss->ShaderGroupEnd(*groupRef);
-        } else {
-            if (config.shader.empty()) return OSL::ShaderGroupRef();
-            groupRef = ss->ShaderGroupBegin(groupName);
-            if (!groupRef) return OSL::ShaderGroupRef();
-            const std::string layerName =
-                config.layer.empty() ? "pbrt_osl_layer" : config.layer;
-            if (!ss->Shader(*groupRef, "surface", config.shader, layerName)) {
-                return OSL::ShaderGroupRef();
-            }
-            ss->ShaderGroupEnd(*groupRef);
+        if (iter != groups.end()) {
+            ++gCounters.groupCacheHits;
+            return iter->second;
         }
-
-        std::vector<const char *> outputs;
-        outputs.push_back("Ci");
-        if (!config.outputName.empty()) outputs.push_back(config.outputName.c_str());
-        ss->attribute(groupRef.get(), "renderer_outputs",
-                      OSL::TypeDesc(OSL::TypeDesc::STRING, int(outputs.size())),
-                      outputs.data());
-        ss->optimize_group(groupRef.get(), GetContext(), true);
-        groups.emplace(key, groupRef);
+        ++gCounters.groupCacheMisses;
+        OSL::ShaderGroupRef groupRef = BuildGroup(config);
+        if (groupRef) groups.emplace(key, groupRef);
         return groupRef;
+    }
+
+    const OSL::ShaderSymbol *ResolveOutputSymbol(const OSLShaderConfig &config,
+                                                 const OSL::ShaderGroup &group) {
+        const std::string key = StringPrintf("%p|%s|%s", &group,
+                                             config.layer.c_str(),
+                                             config.outputName.c_str());
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        auto it = outputSymbols.find(key);
+        if (it != outputSymbols.end()) {
+            ++gCounters.symbolCacheHits;
+            return it->second;
+        }
+        ++gCounters.symbolCacheMisses;
+        const OSL::ShaderSymbol *sym = nullptr;
+        if (!config.layer.empty())
+            sym = ss->find_symbol(group, OSL::ustring(config.layer),
+                                  OSL::ustring(config.outputName));
+        if (!sym) sym = ss->find_symbol(group, OSL::ustring(config.outputName));
+        outputSymbols[key] = sym;
+        return sym;
     }
 
     int GetClosureId(const char *name) {
@@ -232,15 +380,50 @@ struct OSLRuntime {
         return -1;
     }
 
-    std::unique_ptr<PbrtOSLRendererServices> renderer;
-    std::unique_ptr<OSL::ShadingSystem> ss;
-    std::mutex cacheMutex;
-    std::unordered_map<std::string, OSL::ShaderGroupRef> groups;
-
-    static thread_local OSL::PerThreadInfo *tlsThreadInfo;
-    static thread_local OSL::ShadingContext *tlsShadingContext;
+    OSL::ShadingSystem *System() { return ss.get(); }
+    OSL::RendererServices *Renderer() { return renderer.get(); }
 
   private:
+    OSL::ShaderGroupRef BuildGroup(const OSLShaderConfig &config) {
+        const std::string groupName =
+            config.group.empty()
+                ? (config.shader.empty() ? "pbrt_osl_group" : config.shader)
+                : config.group;
+        OSL::ShaderGroupRef groupRef;
+        if (!config.groupSpec.empty()) {
+            groupRef = ss->ShaderGroupBegin(groupName, "surface", config.groupSpec);
+            if (!groupRef) return OSL::ShaderGroupRef();
+            if (!ss->ShaderGroupEnd(*groupRef)) return OSL::ShaderGroupRef();
+        } else {
+            if (config.shader.empty()) return OSL::ShaderGroupRef();
+            groupRef = ss->ShaderGroupBegin(groupName);
+            if (!groupRef) return OSL::ShaderGroupRef();
+            const std::string layerName =
+                config.layer.empty() ? "pbrt_osl_layer" : config.layer;
+            if (!ss->Shader(*groupRef, "surface", config.shader, layerName))
+                return OSL::ShaderGroupRef();
+            if (!ss->ShaderGroupEnd(*groupRef)) return OSL::ShaderGroupRef();
+        }
+        std::vector<const char *> outputs;
+        outputs.push_back("Ci");
+        if (!config.outputName.empty()) outputs.push_back(config.outputName.c_str());
+        ss->attribute(groupRef.get(), "renderer_outputs",
+                      OSL::TypeDesc(OSL::TypeDesc::STRING, int(outputs.size())),
+                      outputs.data());
+        ss->optimize_group(groupRef.get(), GetContext(), true);
+        OSLLog("group built name=%s shader=%s layer=%s", groupName.c_str(),
+               config.shader.c_str(), config.layer.c_str());
+        return groupRef;
+    }
+
+    std::unique_ptr<PbrtOSLRendererServices> renderer;
+    std::unique_ptr<OSL::ShadingSystem> ss;
+    std::mutex threadMutex;
+    std::unordered_map<std::thread::id, ThreadResources> threadData;
+    std::mutex cacheMutex;
+    std::unordered_map<std::string, OSL::ShaderGroupRef> groups;
+    std::unordered_map<std::string, const OSL::ShaderSymbol *> outputSymbols;
+
     void RegisterClosures() {
         static OSL::ClosureParam emissionParams[] = {
             CLOSURE_FINISH_PARAM(EmptyParams),
@@ -328,9 +511,6 @@ struct OSLRuntime {
     }
 };
 
-thread_local OSL::PerThreadInfo *OSLRuntime::tlsThreadInfo = nullptr;
-thread_local OSL::ShadingContext *OSLRuntime::tlsShadingContext = nullptr;
-
 OSLRuntime &GetRuntime() {
     static OSLRuntime runtime;
     return runtime;
@@ -339,13 +519,9 @@ OSLRuntime &GetRuntime() {
 OSL::Vec3 ToOSL(const Vector3f &v) { return OSL::Vec3(v.x, v.y, v.z); }
 OSL::Vec3 ToOSL(const Point3f &p) { return OSL::Vec3(p.x, p.y, p.z); }
 
-Spectrum ToSpectrum(const OSL::Vec3 &v) {
-    Float rgb[3] = {Float(v.x), Float(v.y), Float(v.z)};
-    return Spectrum::FromRGB(rgb);
-}
-
 void InitializeShaderGlobals(const SurfaceInteraction &si,
                              OSL::RendererServices *renderer,
+                             OSLRenderState *renderState,
                              OSL::ShaderGlobals *sg) {
     memset(sg, 0, sizeof(*sg));
     sg->P = ToOSL(si.p);
@@ -366,6 +542,12 @@ void InitializeShaderGlobals(const SurfaceInteraction &si,
     sg->renderer = renderer;
     sg->Ci = nullptr;
     sg->backfacing = Dot(si.wo, Vector3f(si.n)) < 0.f ? 1 : 0;
+    renderState->si = &si;
+    sg->renderstate = renderState;
+    if (si.shape) {
+        sg->object2common = si.shape->ObjectToWorld;
+        sg->shader2common = si.shape->ObjectToWorld;
+    }
 }
 
 bool ExtractFloat(const OSL::TypeDesc &type, const void *address, Float *out) {
@@ -410,13 +592,20 @@ bool ExecuteOSLInternal(const OSLShaderConfig &config,
                         const SurfaceInteraction &si, OSL::ShaderGlobals *sg,
                         OSL::ShaderGroupRef *groupRef,
                         OSL::ShadingContext **ctxOut) {
-    WarnIfMissingShader(config);
     auto &runtime = GetRuntime();
     OSL::ShaderGroupRef group = runtime.ResolveGroup(config);
-    if (!group) return false;
+    if (!group) {
+        ++gCounters.executeFailures;
+        return false;
+    }
     OSL::ShadingContext *ctx = runtime.GetContext();
-    InitializeShaderGlobals(si, runtime.renderer.get(), sg);
-    if (!runtime.ss->execute(*ctx, *group, *sg)) return false;
+    OSLRenderState renderState;
+    InitializeShaderGlobals(si, runtime.Renderer(), &renderState, sg);
+    ++gCounters.executions;
+    if (!runtime.System()->execute(*ctx, *group, *sg)) {
+        ++gCounters.executeFailures;
+        return false;
+    }
     if (groupRef) *groupRef = group;
     if (ctxOut) *ctxOut = ctx;
     return true;
@@ -427,18 +616,15 @@ bool FindAndExtractOutput(const OSLShaderConfig &config,
                           const OSL::ShaderGroup &group, bool wantSpectrum,
                           Float *floatResult, Spectrum *spectrumResult) {
     auto &runtime = GetRuntime();
-    const OSL::ShaderSymbol *sym = nullptr;
-    if (!config.layer.empty())
-        sym = runtime.ss->find_symbol(group, OSL::ustring(config.layer),
-                                      OSL::ustring(config.outputName));
-    if (!sym)
-        sym = runtime.ss->find_symbol(group, OSL::ustring(config.outputName));
+    const OSL::ShaderSymbol *sym = runtime.ResolveOutputSymbol(config, group);
     if (!sym) return false;
-    OSL::TypeDesc type = runtime.ss->symbol_typedesc(sym);
-    const void *address = runtime.ss->symbol_address(ctx, sym);
+    OSL::TypeDesc type = runtime.System()->symbol_typedesc(sym);
+    const void *address = runtime.System()->symbol_address(ctx, sym);
     if (wantSpectrum) return ExtractSpectrum(type, address, spectrumResult);
     return ExtractFloat(type, address, floatResult);
 }
+
+}  // namespace
 #endif
 
 class OSLFloatTexture : public Texture<Float> {
@@ -494,6 +680,7 @@ Texture<Float> *CreateOSLFloatTexture(const Transform &tex2world,
     std::string groupSpec = tp.FindString("groupspec", "");
     Float fallbackValue = tp.FindFloat("default", 0.f);
     OSLShaderConfig config{shader, outputName, layer, group, groupSpec};
+    ValidateAndNormalizeOSLShaderConfig(&config, "Texture \"osl\" (float)");
     return new OSLFloatTexture(config, fallbackValue);
 }
 
@@ -507,6 +694,7 @@ Texture<Spectrum> *CreateOSLSpectrumTexture(const Transform &tex2world,
     std::string groupSpec = tp.FindString("groupspec", "");
     Spectrum fallbackValue = tp.FindSpectrum("defaultcolor", Spectrum(0.5f));
     OSLShaderConfig config{shader, outputName, layer, group, groupSpec};
+    ValidateAndNormalizeOSLShaderConfig(&config, "Texture \"osl\" (spectrum)");
     return new OSLSpectrumTexture(config, fallbackValue);
 }
 
@@ -537,20 +725,28 @@ bool ExecuteOSLShader(const OSLShaderConfig &config,
 bool EvaluateOSLFloatOutput(const OSLShaderConfig &config,
                             const SurfaceInteraction &si, Float fallbackValue,
                             Float *result) {
+    OSLShaderConfig normalized = config;
+    if (!ValidateAndNormalizeOSLShaderConfig(&normalized, "OSL float evaluate")) {
+        ++gCounters.fallbackCount;
+        *result = fallbackValue;
+        return false;
+    }
     OSL::ShaderGlobals sg;
     OSL::ShaderGroupRef group;
     OSL::ShadingContext *ctx = nullptr;
-    if (!ExecuteOSLInternal(config, si, &sg, &group, &ctx)) {
+    if (!ExecuteOSLInternal(normalized, si, &sg, &group, &ctx)) {
         *result = fallbackValue;
+        ++gCounters.fallbackCount;
         return false;
     }
 
     Float value = fallbackValue;
-    if (!FindAndExtractOutput(config, *ctx, *group, false, &value, nullptr)) {
+    if (!FindAndExtractOutput(normalized, *ctx, *group, false, &value, nullptr)) {
         if (!gMissingOutputWarned.exchange(true))
             Warning("OSL output \"%s\" was not found as a float.",
-                    config.outputName.c_str());
+                    normalized.outputName.c_str());
         *result = fallbackValue;
+        ++gCounters.fallbackCount;
         return false;
     }
     *result = value;
@@ -560,20 +756,29 @@ bool EvaluateOSLFloatOutput(const OSLShaderConfig &config,
 bool EvaluateOSLSpectrumOutput(const OSLShaderConfig &config,
                                const SurfaceInteraction &si,
                                const Spectrum &fallbackValue, Spectrum *result) {
+    OSLShaderConfig normalized = config;
+    if (!ValidateAndNormalizeOSLShaderConfig(&normalized,
+                                             "OSL spectrum evaluate")) {
+        ++gCounters.fallbackCount;
+        *result = fallbackValue;
+        return false;
+    }
     OSL::ShaderGlobals sg;
     OSL::ShaderGroupRef group;
     OSL::ShadingContext *ctx = nullptr;
-    if (!ExecuteOSLInternal(config, si, &sg, &group, &ctx)) {
+    if (!ExecuteOSLInternal(normalized, si, &sg, &group, &ctx)) {
         *result = fallbackValue;
+        ++gCounters.fallbackCount;
         return false;
     }
 
     Spectrum value = fallbackValue;
-    if (!FindAndExtractOutput(config, *ctx, *group, true, nullptr, &value)) {
+    if (!FindAndExtractOutput(normalized, *ctx, *group, true, nullptr, &value)) {
         if (!gMissingOutputWarned.exchange(true))
             Warning("OSL output \"%s\" was not found as color/spectrum.",
-                    config.outputName.c_str());
+                    normalized.outputName.c_str());
         *result = fallbackValue;
+        ++gCounters.fallbackCount;
         return false;
     }
     *result = value;
@@ -581,6 +786,18 @@ bool EvaluateOSLSpectrumOutput(const OSLShaderConfig &config,
 }
 
 int GetOSLClosureIdByName(const char *name) { return GetRuntime().GetClosureId(name); }
+
+OSLRuntimeCounters GetOSLRuntimeCounters() {
+    OSLRuntimeCounters stats;
+    stats.executions = gCounters.executions.load();
+    stats.groupCacheHits = gCounters.groupCacheHits.load();
+    stats.groupCacheMisses = gCounters.groupCacheMisses.load();
+    stats.symbolCacheHits = gCounters.symbolCacheHits.load();
+    stats.symbolCacheMisses = gCounters.symbolCacheMisses.load();
+    stats.executeFailures = gCounters.executeFailures.load();
+    stats.fallbackCount = gCounters.fallbackCount.load();
+    return stats;
+}
 #endif
 
 }  // namespace pbrt

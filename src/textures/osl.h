@@ -57,6 +57,16 @@ struct OSLShaderConfig {
     std::string groupSpec;
 };
 
+struct OSLRuntimeCounters {
+    uint64_t executions = 0;
+    uint64_t groupCacheHits = 0;
+    uint64_t groupCacheMisses = 0;
+    uint64_t symbolCacheHits = 0;
+    uint64_t symbolCacheMisses = 0;
+    uint64_t executeFailures = 0;
+    uint64_t fallbackCount = 0;
+};
+
 Texture<Float> *CreateOSLFloatTexture(const Transform &tex2world,
                                       const TextureParams &tp);
 Texture<Spectrum> *CreateOSLSpectrumTexture(const Transform &tex2world,
@@ -65,11 +75,14 @@ Texture<Spectrum> *CreateOSLSpectrumTexture(const Transform &tex2world,
 std::shared_ptr<Texture<Float>> CreateOSLFloatTextureForOutput(
     const std::string &shader, const std::string &outputName,
     Float fallbackValue, const std::string &layer = "",
-    const std::string &group = "");
+    const std::string &group = "", const std::string &groupSpec = "");
 std::shared_ptr<Texture<Spectrum>> CreateOSLSpectrumTextureForOutput(
     const std::string &shader, const std::string &outputName,
     const Spectrum &fallbackValue, const std::string &layer = "",
     const std::string &group = "", const std::string &groupSpec = "");
+
+bool ValidateAndNormalizeOSLShaderConfig(OSLShaderConfig *config,
+                                         const char *ownerLabel);
 
 #ifdef PBRT_ENABLE_OSL
 bool ExecuteOSLShader(const OSLShaderConfig &config,
@@ -81,6 +94,7 @@ bool EvaluateOSLSpectrumOutput(const OSLShaderConfig &config,
                                const SurfaceInteraction &si,
                                const Spectrum &fallbackValue, Spectrum *result);
 int GetOSLClosureIdByName(const char *name);
+OSLRuntimeCounters GetOSLRuntimeCounters();
 #endif
 
 }  // namespace pbrt

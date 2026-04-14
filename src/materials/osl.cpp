@@ -39,6 +39,7 @@
 #include "textures/osl.h"
 
 #include <atomic>
+#include <vector>
 
 namespace pbrt {
 
@@ -127,129 +128,138 @@ Spectrum ToSpectrum(const OSL::Color3 &c) {
 void AddClosureToBSDF(const OSL::ClosureColor *closure, const OSL::Color3 &weight,
                       SurfaceInteraction *si, MemoryArena &arena,
                       TransportMode mode) {
-    if (!closure) return;
-    if (closure->id == OSL::ClosureColor::MUL) {
-        const OSL::ClosureMul *mul = closure->as_mul();
-        AddClosureToBSDF(mul->closure, weight * mul->weight, si, arena, mode);
-        return;
-    }
-    if (closure->id == OSL::ClosureColor::ADD) {
-        const OSL::ClosureAdd *add = closure->as_add();
-        AddClosureToBSDF(add->closureA, weight, si, arena, mode);
-        AddClosureToBSDF(add->closureB, weight, si, arena, mode);
-        return;
-    }
+    std::vector<std::pair<const OSL::ClosureColor *, OSL::Color3>> stack;
+    stack.emplace_back(closure, weight);
+    while (!stack.empty()) {
+        const OSL::ClosureColor *node = stack.back().first;
+        OSL::Color3 nodeWeight = stack.back().second;
+        stack.pop_back();
+        if (!node) continue;
+        if (node->id == OSL::ClosureColor::MUL) {
+            const OSL::ClosureMul *mul = node->as_mul();
+            stack.emplace_back(mul->closure, nodeWeight * mul->weight);
+            continue;
+        }
+        if (node->id == OSL::ClosureColor::ADD) {
+            const OSL::ClosureAdd *add = node->as_add();
+            stack.emplace_back(add->closureA, nodeWeight);
+            stack.emplace_back(add->closureB, nodeWeight);
+            continue;
+        }
 
-    const OSL::ClosureComponent *comp = closure->as_comp();
-    Spectrum w = ToSpectrum(weight * comp->w).Clamp();
-    if (w.IsBlack()) return;
+        const OSL::ClosureComponent *comp = node->as_comp();
+        Spectrum w = ToSpectrum(nodeWeight * comp->w).Clamp();
+        if (w.IsBlack()) continue;
 
-    if (comp->id == DIFFUSE_ID) {
-        si->bsdf->Add(ARENA_ALLOC(arena, LambertianReflection)(w));
-        return;
-    }
-    if (comp->id == OREN_NAYAR_ID) {
-        const OrenNayarParams *params = comp->as<OrenNayarParams>();
-        si->bsdf->Add(ARENA_ALLOC(arena, OrenNayar)(
-            w, Clamp(Float(params->sigma), Float(0), Float(90))));
-        return;
-    }
-    if (comp->id == REFLECTION_ID || comp->id == FRESNEL_REFLECTION_ID) {
-        const ReflectionParams *params = comp->as<ReflectionParams>();
-        Float eta = std::max(Float(1.001f), Float(params->eta));
-        si->bsdf->Add(ARENA_ALLOC(arena, SpecularReflection)(
-            w, ARENA_ALLOC(arena, FresnelDielectric)(1.f, eta)));
-        return;
-    }
-    if (comp->id == REFRACTION_ID) {
-        const RefractionParams *params = comp->as<RefractionParams>();
-        Float eta = std::max(Float(1.001f), Float(params->eta));
-        si->bsdf->Add(ARENA_ALLOC(arena, SpecularTransmission)(w, 1.f, eta, mode));
-        return;
-    }
-    if (comp->id == MICROFACET_ID) {
-        const MicrofacetParams *params = comp->as<MicrofacetParams>();
-        Float eta = std::max(Float(1.001f), Float(params->eta));
-        if (params->refract == 0 || params->refract == 2) {
+        if (comp->id == DIFFUSE_ID) {
+            si->bsdf->Add(ARENA_ALLOC(arena, LambertianReflection)(w));
+            continue;
+        }
+        if (comp->id == OREN_NAYAR_ID) {
+            const OrenNayarParams *params = comp->as<OrenNayarParams>();
+            si->bsdf->Add(ARENA_ALLOC(arena, OrenNayar)(
+                w, Clamp(Float(params->sigma), Float(0), Float(90))));
+            continue;
+        }
+        if (comp->id == REFLECTION_ID || comp->id == FRESNEL_REFLECTION_ID) {
+            const ReflectionParams *params = comp->as<ReflectionParams>();
+            Float eta = std::max(Float(1.001f), Float(params->eta));
+            si->bsdf->Add(ARENA_ALLOC(arena, SpecularReflection)(
+                w, ARENA_ALLOC(arena, FresnelDielectric)(1.f, eta)));
+            continue;
+        }
+        if (comp->id == REFRACTION_ID) {
+            const RefractionParams *params = comp->as<RefractionParams>();
+            Float eta = std::max(Float(1.001f), Float(params->eta));
+            si->bsdf->Add(
+                ARENA_ALLOC(arena, SpecularTransmission)(w, 1.f, eta, mode));
+            continue;
+        }
+        if (comp->id == MICROFACET_ID) {
+            const MicrofacetParams *params = comp->as<MicrofacetParams>();
+            Float eta = std::max(Float(1.001f), Float(params->eta));
+            if (params->refract == 0 || params->refract == 2) {
+                MicrofacetDistribution *d = nullptr;
+                if (params->dist.string() == "ggx")
+                    d = ARENA_ALLOC(arena, TrowbridgeReitzDistribution)(
+                        std::max(Float(0.001f), Float(params->xalpha)),
+                        std::max(Float(0.001f), Float(params->yalpha)));
+                else
+                    d = ARENA_ALLOC(arena, BeckmannDistribution)(
+                        std::max(Float(0.001f), Float(params->xalpha)),
+                        std::max(Float(0.001f), Float(params->yalpha)));
+                si->bsdf->Add(ARENA_ALLOC(arena, MicrofacetReflection)(
+                    w, d, ARENA_ALLOC(arena, FresnelDielectric)(1.f, eta)));
+            }
+            if (params->refract == 1 || params->refract == 2) {
+                MicrofacetDistribution *d = nullptr;
+                if (params->dist.string() == "ggx")
+                    d = ARENA_ALLOC(arena, TrowbridgeReitzDistribution)(
+                        std::max(Float(0.001f), Float(params->xalpha)),
+                        std::max(Float(0.001f), Float(params->yalpha)));
+                else
+                    d = ARENA_ALLOC(arena, BeckmannDistribution)(
+                        std::max(Float(0.001f), Float(params->xalpha)),
+                        std::max(Float(0.001f), Float(params->yalpha)));
+                si->bsdf->Add(ARENA_ALLOC(arena, MicrofacetTransmission)(
+                    w, d, 1.f, eta, mode));
+            }
+            continue;
+        }
+        if (comp->id == DIELECTRIC_BSDF_ID) {
+            const DielectricBsdfParams *params = comp->as<DielectricBsdfParams>();
+            Float eta = std::max(Float(1.001f), Float(params->ior));
+            const std::string dist = params->distribution.string();
+            const Float ax = std::max(Float(0.001f), Float(params->roughness_x));
+            const Float ay = std::max(Float(0.001f), Float(params->roughness_y));
             MicrofacetDistribution *d = nullptr;
-            if (params->dist.string() == "ggx")
-                d = ARENA_ALLOC(arena, TrowbridgeReitzDistribution)(
-                    std::max(Float(0.001f), Float(params->xalpha)),
-                    std::max(Float(0.001f), Float(params->yalpha)));
-            else
-                d = ARENA_ALLOC(arena, BeckmannDistribution)(
-                    std::max(Float(0.001f), Float(params->xalpha)),
-                    std::max(Float(0.001f), Float(params->yalpha)));
-            si->bsdf->Add(ARENA_ALLOC(arena, MicrofacetReflection)(
-                w, d, ARENA_ALLOC(arena, FresnelDielectric)(1.f, eta)));
-        }
-        if (params->refract == 1 || params->refract == 2) {
-            MicrofacetDistribution *d = nullptr;
-            if (params->dist.string() == "ggx")
-                d = ARENA_ALLOC(arena, TrowbridgeReitzDistribution)(
-                    std::max(Float(0.001f), Float(params->xalpha)),
-                    std::max(Float(0.001f), Float(params->yalpha)));
-            else
-                d = ARENA_ALLOC(arena, BeckmannDistribution)(
-                    std::max(Float(0.001f), Float(params->xalpha)),
-                    std::max(Float(0.001f), Float(params->yalpha)));
-            si->bsdf->Add(ARENA_ALLOC(arena, MicrofacetTransmission)(w, d, 1.f,
-                                                                      eta, mode));
-        }
-        return;
-    }
-    if (comp->id == DIELECTRIC_BSDF_ID) {
-        const DielectricBsdfParams *params = comp->as<DielectricBsdfParams>();
-        Float eta = std::max(Float(1.001f), Float(params->ior));
-        const std::string dist = params->distribution.string();
-        const Float ax = std::max(Float(0.001f), Float(params->roughness_x));
-        const Float ay = std::max(Float(0.001f), Float(params->roughness_y));
-        MicrofacetDistribution *d = nullptr;
-        if (dist == "ggx")
-            d = ARENA_ALLOC(arena, TrowbridgeReitzDistribution)(ax, ay);
-        else
-            d = ARENA_ALLOC(arena, BeckmannDistribution)(ax, ay);
-        Spectrum reflTint = ToSpectrum(params->reflection_tint).Clamp();
-        Spectrum transTint = ToSpectrum(params->transmission_tint).Clamp();
-        if (!reflTint.IsBlack()) {
-            si->bsdf->Add(ARENA_ALLOC(arena, MicrofacetReflection)(
-                w * reflTint, d, ARENA_ALLOC(arena, FresnelDielectric)(1.f, eta)));
-        }
-        if (!transTint.IsBlack()) {
-            MicrofacetDistribution *dt = nullptr;
             if (dist == "ggx")
-                dt = ARENA_ALLOC(arena, TrowbridgeReitzDistribution)(ax, ay);
+                d = ARENA_ALLOC(arena, TrowbridgeReitzDistribution)(ax, ay);
             else
-                dt = ARENA_ALLOC(arena, BeckmannDistribution)(ax, ay);
-            si->bsdf->Add(ARENA_ALLOC(arena, MicrofacetTransmission)(
-                w * transTint, dt, 1.f, eta, mode));
+                d = ARENA_ALLOC(arena, BeckmannDistribution)(ax, ay);
+            Spectrum reflTint = ToSpectrum(params->reflection_tint).Clamp();
+            Spectrum transTint = ToSpectrum(params->transmission_tint).Clamp();
+            if (!reflTint.IsBlack()) {
+                si->bsdf->Add(ARENA_ALLOC(arena, MicrofacetReflection)(
+                    w * reflTint, d,
+                    ARENA_ALLOC(arena, FresnelDielectric)(1.f, eta)));
+            }
+            if (!transTint.IsBlack()) {
+                MicrofacetDistribution *dt = nullptr;
+                if (dist == "ggx")
+                    dt = ARENA_ALLOC(arena, TrowbridgeReitzDistribution)(ax, ay);
+                else
+                    dt = ARENA_ALLOC(arena, BeckmannDistribution)(ax, ay);
+                si->bsdf->Add(ARENA_ALLOC(arena, MicrofacetTransmission)(
+                    w * transTint, dt, 1.f, eta, mode));
+            }
+            continue;
         }
-        return;
-    }
-    if (comp->id == CONDUCTOR_BSDF_ID) {
-        const ConductorBsdfParams *params = comp->as<ConductorBsdfParams>();
-        const std::string dist = params->distribution.string();
-        const Float ax = std::max(Float(0.001f), Float(params->roughness_x));
-        const Float ay = std::max(Float(0.001f), Float(params->roughness_y));
-        MicrofacetDistribution *d = nullptr;
-        if (dist == "ggx")
-            d = ARENA_ALLOC(arena, TrowbridgeReitzDistribution)(ax, ay);
-        else
-            d = ARENA_ALLOC(arena, BeckmannDistribution)(ax, ay);
-        Spectrum eta = ToSpectrum(params->ior).Clamp();
-        Spectrum k = ToSpectrum(params->extinction).Clamp();
-        si->bsdf->Add(ARENA_ALLOC(arena, MicrofacetReflection)(
-            w, d, ARENA_ALLOC(arena, FresnelConductor)(Spectrum(1.f), eta, k)));
-        return;
-    }
-    if (comp->id == TRANSPARENT_ID || comp->id == TRANSPARENT_BSDF_ID) {
-        si->bsdf->Add(ARENA_ALLOC(arena, SpecularTransmission)(w, 1.f, 1.0001f,
-                                                                mode));
-        return;
-    }
+        if (comp->id == CONDUCTOR_BSDF_ID) {
+            const ConductorBsdfParams *params = comp->as<ConductorBsdfParams>();
+            const std::string dist = params->distribution.string();
+            const Float ax = std::max(Float(0.001f), Float(params->roughness_x));
+            const Float ay = std::max(Float(0.001f), Float(params->roughness_y));
+            MicrofacetDistribution *d = nullptr;
+            if (dist == "ggx")
+                d = ARENA_ALLOC(arena, TrowbridgeReitzDistribution)(ax, ay);
+            else
+                d = ARENA_ALLOC(arena, BeckmannDistribution)(ax, ay);
+            Spectrum eta = ToSpectrum(params->ior).Clamp();
+            Spectrum k = ToSpectrum(params->extinction).Clamp();
+            si->bsdf->Add(ARENA_ALLOC(arena, MicrofacetReflection)(
+                w, d, ARENA_ALLOC(arena, FresnelConductor)(Spectrum(1.f), eta, k)));
+            continue;
+        }
+        if (comp->id == TRANSPARENT_ID || comp->id == TRANSPARENT_BSDF_ID) {
+            si->bsdf->Add(ARENA_ALLOC(arena, SpecularTransmission)(
+                w, 1.f, 1.0001f, mode));
+            continue;
+        }
 
-    if (!gUnknownClosureWarned.exchange(true))
-        Warning("Unsupported OSL closure id %d in Material \"osl\".", comp->id);
+        if (!gUnknownClosureWarned.exchange(true))
+            Warning("[OSL][closure] Unsupported OSL closure id %d.", comp->id);
+    }
 }
 #endif
 
@@ -264,6 +274,7 @@ void OSLMaterial::ComputeScatteringFunctions(SurfaceInteraction *si,
     si->bsdf = ARENA_ALLOC(arena, BSDF)(*si);
 #ifdef PBRT_ENABLE_OSL
     OSLShaderConfig config{shader, "Ci", layer, group, groupSpec};
+    ValidateAndNormalizeOSLShaderConfig(&config, "Material \"osl\"");
     OSL::ShaderGlobals sg;
     if (ExecuteOSLShader(config, *si, &sg) && sg.Ci) {
         AddClosureToBSDF(sg.Ci, OSL::Color3(1.f), si, arena, mode);
@@ -316,8 +327,10 @@ OSLMaterial *CreateOSLMaterial(const TextureParams &mp) {
                                                    group, groupSpec);
 
     std::shared_ptr<Texture<Float>> bumpMap = mp.GetFloatTextureOrNull("bumpmap");
-    return new OSLMaterial(shader, layer, group, groupSpec, baseColor, roughness,
-                           bumpMap);
+    OSLShaderConfig config{shader, "Ci", layer, group, groupSpec};
+    ValidateAndNormalizeOSLShaderConfig(&config, "Material \"osl\"");
+    return new OSLMaterial(config.shader, config.layer, config.group,
+                           config.groupSpec, baseColor, roughness, bumpMap);
 }
 
 }  // namespace pbrt
