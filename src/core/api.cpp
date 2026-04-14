@@ -76,6 +76,7 @@
 #include "materials/metal.h"
 #include "materials/mirror.h"
 #include "materials/mixmat.h"
+#include "materials/osl.h"
 #include "materials/plastic.h"
 #include "materials/substrate.h"
 #include "materials/subsurface.h"
@@ -107,6 +108,7 @@
 #include "textures/imagemap.h"
 #include "textures/marble.h"
 #include "textures/mix.h"
+#include "textures/osl.h"
 #include "textures/ptex.h"
 #include "textures/scale.h"
 #include "textures/uv.h"
@@ -586,6 +588,8 @@ std::shared_ptr<Material> MakeMaterial(const std::string &name,
         material = CreateKdSubsurfaceMaterial(mp);
     else if (name == "fourier")
         material = CreateFourierMaterial(mp);
+    else if (name == "osl")
+        material = CreateOSLMaterial(mp);
     else {
         Warning("Material \"%s\" unknown. Using \"matte\".", name.c_str());
         material = CreateMatteMaterial(mp);
@@ -636,6 +640,8 @@ std::shared_ptr<Texture<Float>> MakeFloatTexture(const std::string &name,
         tex = CreateWindyFloatTexture(tex2world, tp);
     else if (name == "ptex")
         tex = CreatePtexFloatTexture(tex2world, tp);
+    else if (name == "osl")
+        tex = CreateOSLFloatTexture(tex2world, tp);
     else
         Warning("Float texture \"%s\" unknown.", name.c_str());
     tp.ReportUnused();
@@ -672,6 +678,8 @@ std::shared_ptr<Texture<Spectrum>> MakeSpectrumTexture(
         tex = CreateWindySpectrumTexture(tex2world, tp);
     else if (name == "ptex")
         tex = CreatePtexSpectrumTexture(tex2world, tp);
+    else if (name == "osl")
+        tex = CreateOSLSpectrumTexture(tex2world, tp);
     else
         Warning("Spectrum texture \"%s\" unknown.", name.c_str());
     tp.ReportUnused();

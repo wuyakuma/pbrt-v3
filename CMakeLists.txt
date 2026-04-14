@@ -16,6 +16,7 @@ IF (PBRT_FLOAT_AS_DOUBLE)
 ENDIF()
 
 OPTION(PBRT_SAMPLED_SPECTRUM "Use SampledSpectrum rather than RGBSpectrum" OFF)
+OPTION(PBRT_ENABLE_OSL "Enable OpenShadingLanguage integration" OFF)
 
 IF (PBRT_SAMPLED_SPECTRUM)
   ADD_DEFINITIONS ( -D PBRT_SAMPLED_SPECTRUM )
@@ -364,6 +365,46 @@ SET_PROPERTY(TARGET Ptex_static ptxinfo halftest ftest rtest wtest PROPERTY FOLD
 INCLUDE_DIRECTORIES ( src/ext/ptex/src/ptex )
 
 ###########################################################################
+# OpenShadingLanguage (optional)
+
+SET(PBRT_OSL_LIBS "")
+IF(PBRT_ENABLE_OSL)
+  IF(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/src/ext/OpenShadingLanguage")
+    ADD_DEFINITIONS(-D PBRT_ENABLE_OSL=1)
+    ADD_SUBDIRECTORY(src/ext/OpenShadingLanguage EXCLUDE_FROM_ALL)
+
+    # Support either plain or namespaced target names from OSL CMake exports.
+    IF(TARGET oslexec)
+      LIST(APPEND PBRT_OSL_LIBS oslexec)
+    ELSEIF(TARGET OSL::oslexec)
+      LIST(APPEND PBRT_OSL_LIBS OSL::oslexec)
+    ENDIF()
+
+    IF(TARGET oslquery)
+      LIST(APPEND PBRT_OSL_LIBS oslquery)
+    ELSEIF(TARGET OSL::oslquery)
+      LIST(APPEND PBRT_OSL_LIBS OSL::oslquery)
+    ENDIF()
+
+    IF(TARGET oslcomp)
+      LIST(APPEND PBRT_OSL_LIBS oslcomp)
+    ELSEIF(TARGET OSL::oslcomp)
+      LIST(APPEND PBRT_OSL_LIBS OSL::oslcomp)
+    ENDIF()
+
+    INCLUDE_DIRECTORIES(src/ext/OpenShadingLanguage/src/include)
+    IF(PBRT_OSL_LIBS STREQUAL "")
+      MESSAGE(WARNING
+        "PBRT_ENABLE_OSL is ON, but no known OSL targets were found "
+        "(expected one of oslexec/oslquery/oslcomp or OSL::*).")
+    ENDIF()
+  ELSE()
+    MESSAGE(WARNING
+      "PBRT_ENABLE_OSL is ON, but src/ext/OpenShadingLanguage was not found.")
+  ENDIF()
+ENDIF()
+
+###########################################################################
 # On to pbrt...
 
 SET ( PBRT_CORE_SOURCE
@@ -516,6 +557,7 @@ SET(ALL_PBRT_LIBS
   glog
   Ptex_static
   ${ZLIB_LIBRARY}
+  ${PBRT_OSL_LIBS}
 )
 
 # Main renderer

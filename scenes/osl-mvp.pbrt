@@ -1,0 +1,45 @@
+# Minimal OSL integration scene for PBRT.
+# This demonstrates Texture "osl" and Material "osl" wiring.
+
+LookAt 0 1.6 4   0 0.6 0   0 1 0
+Camera "perspective" "float fov" [45]
+Film "image"
+    "integer xresolution" [640]
+    "integer yresolution" [360]
+    "string filename" "osl-mvp.exr"
+Sampler "halton" "integer pixelsamples" [16]
+Integrator "path"
+
+WorldBegin
+
+AttributeBegin
+    AreaLightSource "area" "color L" [18 18 18]
+    Translate 0 3 0
+    Shape "sphere" "float radius" [0.4]
+AttributeEnd
+
+Texture "osl_roughness" "float" "osl"
+    "string shader" ["uv_debug"]
+    "string group" ["roughness_group"]
+    "string layer" ["uv_layer"]
+    "string output" ["u"]
+    "float default" [0.2]
+
+Texture "osl_color" "spectrum" "osl"
+    "string shader" ["uv_debug"]
+    "string group" ["color_group"]
+    "string layer" ["uv_layer"]
+    "string output" ["uvcolor"]
+    "rgb defaultcolor" [0.7 0.7 0.7]
+
+AttributeBegin
+    Material "osl"
+        "string shader" ["uv_debug"]
+        "string group" ["material_group"]
+        "string layer" ["uv_layer"]
+        "texture base_color" ["osl_color"]
+        "texture roughness" ["osl_roughness"]
+    Shape "sphere" "float radius" [1.0]
+AttributeEnd
+
+WorldEnd
