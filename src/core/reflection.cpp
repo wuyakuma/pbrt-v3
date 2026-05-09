@@ -109,6 +109,18 @@ Float ScaledBxDF::Pdf(const Vector3f &wo, const Vector3f &wi) const {
     return bxdf->Pdf(wo, wi);
 }
 
+Spectrum ScaledBxDF::SGDiffuseWeight(const Vector3f &wo) const {
+    return scale * bxdf->SGDiffuseWeight(wo);
+}
+
+bool ScaledBxDF::SGGlossyWeight(const Vector3f &wo, Spectrum *weight,
+                                Float *alphax, Float *alphay) const {
+    Spectrum unscaled;
+    if (!bxdf->SGGlossyWeight(wo, &unscaled, alphax, alphay)) return false;
+    *weight = scale * unscaled;
+    return true;
+}
+
 std::string ScaledBxDF::ToString() const {
     return std::string("[ ScaledBxDF bxdf: ") + bxdf->ToString() +
            std::string(" scale: ") + scale.ToString() + std::string(" ]");
@@ -393,6 +405,17 @@ Float BxDF::Pdf(const Vector3f &wo, const Vector3f &wi) const {
     return SameHemisphere(wo, wi) ? AbsCosTheta(wi) * InvPi : 0;
 }
 
+Spectrum BxDF::SGDiffuseWeight(const Vector3f &wo) const {
+    if (!(type & BSDF_DIFFUSE) || !(type & BSDF_REFLECTION)) return Spectrum(0.f);
+    Vector3f wi(0, 0, wo.z >= 0 ? 1 : -1);
+    return f(wo, wi) * Pi;
+}
+
+bool BxDF::SGGlossyWeight(const Vector3f &wo, Spectrum *weight, Float *alphax,
+                          Float *alphay) const {
+    return false;
+}
+
 Spectrum LambertianTransmission::Sample_f(const Vector3f &wo, Vector3f *wi,
                                           const Point2f &u, Float *pdf,
                                           BxDFType *sampledType) const {
@@ -426,6 +449,13 @@ Float MicrofacetReflection::Pdf(const Vector3f &wo, const Vector3f &wi) const {
     if (!SameHemisphere(wo, wi)) return 0;
     Vector3f wh = Normalize(wo + wi);
     return distribution->Pdf(wo, wh) / (4 * Dot(wo, wh));
+}
+
+bool MicrofacetReflection::SGGlossyWeight(const Vector3f &wo, Spectrum *weight,
+                                          Float *alphax, Float *alphay) const {
+    if (!distribution->GetRoughness(alphax, alphay)) return false;
+    *weight = R;
+    return true;
 }
 
 Spectrum MicrofacetTransmission::Sample_f(const Vector3f &wo, Vector3f *wi,
@@ -709,6 +739,35 @@ Spectrum BSDF::rho(const Vector3f &woWorld, int nSamples, const Point2f *samples
         if (bxdfs[i]->MatchesFlags(flags))
             ret += bxdfs[i]->rho(wo, nSamples, samples);
     return ret;
+}
+
+void BSDF::SGSamplingInfo(const Vector3f &woW, Spectrum *diffuseWeight,
+                          Spectrum *glossyWeight, Float *alphax,
+                          Float *alphay) const {
+    Vector3f wo = WorldToLocal(woW);
+    *diffuseWeight = Spectrum(0.f);
+    *glossyWeight = Spectrum(0.f);
+    Float totalGlossyY = 0;
+    Float weightedAlphaX = 0, weightedAlphaY = 0;
+    for (int i = 0; i < nBxDFs; ++i) {
+        if (bxdfs[i]->type & BSDF_SPECULAR) continue;
+        *diffuseWeight += bxdfs[i]->SGDiffuseWeight(wo);
+        Spectrum weight;
+        Float ax, ay;
+        if (bxdfs[i]->SGGlossyWeight(wo, &weight, &ax, &ay)) {
+            Float y = weight.y();
+            *glossyWeight += weight;
+            weightedAlphaX += y * ax;
+            weightedAlphaY += y * ay;
+            totalGlossyY += y;
+        }
+    }
+    if (totalGlossyY > 0) {
+        *alphax = weightedAlphaX / totalGlossyY;
+        *alphay = weightedAlphaY / totalGlossyY;
+    } else {
+        *alphax = *alphay = 1;
+    }
 }
 
 Spectrum BSDF::Sample_f(const Vector3f &woWorld, Vector3f *wiWorld,

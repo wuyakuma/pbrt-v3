@@ -383,6 +383,7 @@ SET ( PBRT_CORE_SOURCE
   src/core/interpolation.cpp
   src/core/light.cpp
   src/core/lightdistrib.cpp
+  src/core/lighttree.cpp
   src/core/lowdiscrepancy.cpp
   src/core/material.cpp
   src/core/medium.cpp
@@ -399,6 +400,7 @@ SET ( PBRT_CORE_SOURCE
   src/core/sampling.cpp
   src/core/scene.cpp
   src/core/shape.cpp
+  src/core/sg.cpp
   src/core/sobolmatrices.cpp
   src/core/spectrum.cpp
   src/core/stats.cpp
@@ -422,6 +424,7 @@ SET ( PBRT_CORE_HEADERS
   src/core/interaction.h
   src/core/interpolation.h
   src/core/light.h
+  src/core/lighttree.h
   src/core/lowdiscrepancy.h
   src/core/material.h
   src/core/medium.h
@@ -441,6 +444,7 @@ SET ( PBRT_CORE_HEADERS
   src/core/sampling.h
   src/core/scene.h
   src/core/shape.h
+  src/core/sg.h
   src/core/sobolmatrices.h
   src/core/spectrum.h
   src/core/stats.h

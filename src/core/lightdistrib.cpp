@@ -34,6 +34,7 @@
 // low res image first?
 
 #include "lightdistrib.h"
+#include "lighttree.h"
 #include "lowdiscrepancy.h"
 #include "parallel.h"
 #include "scene.h"
@@ -44,6 +45,14 @@
 namespace pbrt {
 
 LightDistribution::~LightDistribution() {}
+
+bool LightDistribution::SampleLight(const Interaction &it, Float u,
+                                    int *lightNum, Float *pdf) const {
+    const Distribution1D *distrib = Lookup(it.p);
+    if (!distrib) return false;
+    *lightNum = distrib->SampleDiscrete(u, pdf);
+    return *pdf > 0;
+}
 
 std::unique_ptr<LightDistribution> CreateLightSampleDistribution(
     const std::string &name, const Scene &scene) {
@@ -56,6 +65,9 @@ std::unique_ptr<LightDistribution> CreateLightSampleDistribution(
     else if (name == "spatial")
         return std::unique_ptr<LightDistribution>{
             new SpatialLightDistribution(scene)};
+    else if (name == "sgtree")
+        return std::unique_ptr<LightDistribution>{
+            new SGLightTreeDistribution(scene)};
     else {
         Error(
             "Light sample distribution type \"%s\" unknown. Using \"spatial\".",

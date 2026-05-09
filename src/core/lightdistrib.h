@@ -35,6 +35,7 @@
 
 #include "pbrt.h"
 #include "geometry.h"
+#include "interaction.h"
 #include "sampling.h"
 #include <atomic>
 #include <functional>
@@ -54,6 +55,8 @@ class LightDistribution {
     // Given a point |p| in space, this method returns a (hopefully
     // effective) sampling distribution for light sources at that point.
     virtual const Distribution1D *Lookup(const Point3f &p) const = 0;
+    virtual bool SampleLight(const Interaction &it, Float u, int *lightNum,
+                             Float *pdf) const;
 };
 
 std::unique_ptr<LightDistribution> CreateLightSampleDistribution(

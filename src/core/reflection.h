@@ -194,6 +194,9 @@ class BSDF {
                       BxDFType *sampledType = nullptr) const;
     Float Pdf(const Vector3f &wo, const Vector3f &wi,
               BxDFType flags = BSDF_ALL) const;
+    void SGSamplingInfo(const Vector3f &woW, Spectrum *diffuseWeight,
+                        Spectrum *glossyWeight, Float *alphax,
+                        Float *alphay) const;
     std::string ToString() const;
 
     // BSDF Public Data
@@ -233,6 +236,9 @@ class BxDF {
     virtual Spectrum rho(int nSamples, const Point2f *samples1,
                          const Point2f *samples2) const;
     virtual Float Pdf(const Vector3f &wo, const Vector3f &wi) const;
+    virtual Spectrum SGDiffuseWeight(const Vector3f &wo) const;
+    virtual bool SGGlossyWeight(const Vector3f &wo, Spectrum *weight,
+                                Float *alphax, Float *alphay) const;
     virtual std::string ToString() const = 0;
 
     // BxDF Public Data
@@ -261,6 +267,9 @@ class ScaledBxDF : public BxDF {
     Spectrum Sample_f(const Vector3f &wo, Vector3f *wi, const Point2f &sample,
                       Float *pdf, BxDFType *sampledType) const;
     Float Pdf(const Vector3f &wo, const Vector3f &wi) const;
+    Spectrum SGDiffuseWeight(const Vector3f &wo) const;
+    bool SGGlossyWeight(const Vector3f &wo, Spectrum *weight, Float *alphax,
+                        Float *alphay) const;
     std::string ToString() const;
 
   private:
@@ -391,6 +400,7 @@ class LambertianReflection : public BxDF {
     LambertianReflection(const Spectrum &R)
         : BxDF(BxDFType(BSDF_REFLECTION | BSDF_DIFFUSE)), R(R) {}
     Spectrum f(const Vector3f &wo, const Vector3f &wi) const;
+    Spectrum SGDiffuseWeight(const Vector3f &wo) const { return R; }
     Spectrum rho(const Vector3f &, int, const Point2f *) const { return R; }
     Spectrum rho(int, const Point2f *, const Point2f *) const { return R; }
     std::string ToString() const;
@@ -422,6 +432,7 @@ class OrenNayar : public BxDF {
   public:
     // OrenNayar Public Methods
     Spectrum f(const Vector3f &wo, const Vector3f &wi) const;
+    Spectrum SGDiffuseWeight(const Vector3f &wo) const { return R; }
     OrenNayar(const Spectrum &R, Float sigma)
         : BxDF(BxDFType(BSDF_REFLECTION | BSDF_DIFFUSE)), R(R) {
         sigma = Radians(sigma);
@@ -450,6 +461,8 @@ class MicrofacetReflection : public BxDF {
     Spectrum Sample_f(const Vector3f &wo, Vector3f *wi, const Point2f &u,
                       Float *pdf, BxDFType *sampledType) const;
     Float Pdf(const Vector3f &wo, const Vector3f &wi) const;
+    bool SGGlossyWeight(const Vector3f &wo, Spectrum *weight, Float *alphax,
+                        Float *alphay) const;
     std::string ToString() const;
 
   private:

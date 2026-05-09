@@ -61,6 +61,9 @@ class MicrofacetDistribution {
     virtual Vector3f Sample_wh(const Vector3f &wo, const Point2f &u) const = 0;
     Float Pdf(const Vector3f &wo, const Vector3f &wh) const;
     virtual std::string ToString() const = 0;
+    virtual bool GetRoughness(Float *alphax, Float *alphay) const {
+        return false;
+    }
 
   protected:
     // MicrofacetDistribution Protected Methods
@@ -93,6 +96,11 @@ class BeckmannDistribution : public MicrofacetDistribution {
     Float D(const Vector3f &wh) const;
     Vector3f Sample_wh(const Vector3f &wo, const Point2f &u) const;
     std::string ToString() const;
+    bool GetRoughness(Float *ax, Float *ay) const {
+        *ax = alphax;
+        *ay = alphay;
+        return true;
+    }
 
   private:
     // BeckmannDistribution Private Methods
@@ -114,6 +122,11 @@ class TrowbridgeReitzDistribution : public MicrofacetDistribution {
     Float D(const Vector3f &wh) const;
     Vector3f Sample_wh(const Vector3f &wo, const Point2f &u) const;
     std::string ToString() const;
+    bool GetRoughness(Float *ax, Float *ay) const {
+        *ax = alphax;
+        *ay = alphay;
+        return true;
+    }
 
   private:
     // TrowbridgeReitzDistribution Private Methods

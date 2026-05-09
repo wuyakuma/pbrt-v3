@@ -65,6 +65,9 @@ class DiffuseAreaLight : public AreaLight {
                        Float *pdfDir) const;
     void Pdf_Le(const Ray &, const Normal3f &, Float *pdfPos,
                 Float *pdfDir) const;
+    const std::shared_ptr<Shape> &GetShape() const { return shape; }
+    bool IsTwoSided() const { return twoSided; }
+    Float Area() const { return area; }
 
   protected:
     // DiffuseAreaLight Protected Data

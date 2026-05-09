@@ -34,6 +34,7 @@
 #include "integrator.h"
 #include "scene.h"
 #include "interaction.h"
+#include "lightdistrib.h"
 #include "sampling.h"
 #include "parallel.h"
 #include "film.h"
@@ -103,6 +104,32 @@ Spectrum UniformSampleOneLight(const Interaction &it, const Scene &scene,
     Point2f uScattering = sampler.Get2D();
     return EstimateDirect(it, uScattering, *light, uLight,
                           scene, sampler, arena, handleMedia) / lightPdf;
+}
+
+Spectrum UniformSampleOneLight(const Interaction &it, const Scene &scene,
+                               MemoryArena &arena, Sampler &sampler,
+                               bool handleMedia,
+                               const LightDistribution *lightDistribution) {
+    ProfilePhase p(Prof::DirectLighting);
+    int nLights = int(scene.lights.size());
+    if (nLights == 0) return Spectrum(0.f);
+    int lightNum;
+    Float lightPdf;
+    if (lightDistribution) {
+        if (!lightDistribution->SampleLight(it, sampler.Get1D(), &lightNum,
+                                            &lightPdf) ||
+            lightPdf == 0)
+            return Spectrum(0.f);
+    } else {
+        lightNum = std::min((int)(sampler.Get1D() * nLights), nLights - 1);
+        lightPdf = Float(1) / nLights;
+    }
+    const std::shared_ptr<Light> &light = scene.lights[lightNum];
+    Point2f uLight = sampler.Get2D();
+    Point2f uScattering = sampler.Get2D();
+    return EstimateDirect(it, uScattering, *light, uLight, scene, sampler,
+                          arena, handleMedia) /
+           lightPdf;
 }
 
 Spectrum EstimateDirect(const Interaction &it, const Point2f &uScattering,

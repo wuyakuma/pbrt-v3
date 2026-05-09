@@ -5,12 +5,37 @@
 #include "pbrt.h"
 #include "rng.h"
 #include "sampling.h"
+#include "sg.h"
 #include "lowdiscrepancy.h"
 #include "samplers/maxmin.h"
 #include "samplers/sobol.h"
 #include "samplers/zerotwosequence.h"
 
 using namespace pbrt;
+
+TEST(SphericalGaussian, PositiveDiffuseIntegral) {
+    for (Float sharpness : {Float(0.1), Float(1), Float(10), Float(100)}) {
+        EXPECT_GT(SGIntegral(sharpness), 0);
+        EXPECT_GE(SGClampedCosineProductIntegralOverPi2024(-1, sharpness), 0);
+        EXPECT_GT(SGClampedCosineProductIntegralOverPi2024(1, sharpness), 0);
+        EXPECT_GE(SGClampedCosineProductIntegralOverPi2024(1, sharpness),
+                  SGClampedCosineProductIntegralOverPi2024(-1, sharpness));
+    }
+}
+
+TEST(SphericalGaussian, ProductAndGlossyHelpersAreFinite) {
+    SGLobe product = SGProduct(Normalize(Vector3f(1, 0, 1)), 4,
+                               Normalize(Vector3f(0, 1, 1)), 8);
+    EXPECT_TRUE(std::isfinite(product.sharpness));
+    EXPECT_TRUE(std::isfinite(product.logAmplitude));
+    EXPECT_GT(product.sharpness, 0);
+
+    Vector3f wi = Normalize(Vector3f(0.2, 0.3, 1));
+    Vector3f dominant = GGXDominantVisibleNormal(wi, Float(0.3), Float(0.6));
+    EXPECT_NEAR(dominant.Length(), 1, 1e-4);
+    SGMatrix2x2 roughness(Float(0.09), 0, 0, Float(0.36));
+    EXPECT_GT(SGGXReflectionPDF(wi, dominant, roughness), 0);
+}
 
 TEST(LowDiscrepancy, RadicalInverse) {
     for (int a = 0; a < 1024; ++a) {

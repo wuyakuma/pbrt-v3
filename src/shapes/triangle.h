@@ -88,6 +88,11 @@ class Triangle : public Shape {
 
     using Shape::Sample;  // Bring in the other Sample() overload.
     Interaction Sample(const Point2f &u, Float *pdf) const;
+    void GetVertices(Point3f p[3]) const {
+        p[0] = mesh->p[v[0]];
+        p[1] = mesh->p[v[1]];
+        p[2] = mesh->p[v[2]];
+    }
 
     // Returns the solid angle subtended by the triangle w.r.t. the given
     // reference point p.
