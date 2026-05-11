@@ -746,6 +746,8 @@ std::shared_ptr<Light> MakeLight(const std::string &name,
         light = CreateDistantLight(light2world, paramSet);
     else if (name == "infinite" || name == "exinfinite")
         light = CreateInfiniteLight(light2world, paramSet);
+    else if (name == "sginfinite")
+        light = CreateSGInfiniteLight(light2world, paramSet);
     else
         Warning("Light \"%s\" unknown.", name.c_str());
     paramSet.ReportUnused();

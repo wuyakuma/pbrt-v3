@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <algorithm>
 #include "pbrt.h"
+#include "lights/infinite.h"
+#include "parallel.h"
 #include "rng.h"
 #include "sampling.h"
 #include "sg.h"
@@ -35,6 +37,36 @@ TEST(SphericalGaussian, ProductAndGlossyHelpersAreFinite) {
     EXPECT_NEAR(dominant.Length(), 1, 1e-4);
     SGMatrix2x2 roughness(Float(0.09), 0, 0, Float(0.36));
     EXPECT_GT(SGGXReflectionPDF(wi, dominant, roughness), 0);
+}
+
+TEST(SGInfiniteAreaLight, UniformTreePdfNormalizes) {
+    ParallelInit();
+    SGInfiniteAreaLight light(Transform(), Spectrum(1.f), 1, "", 1, 1);
+    Interaction ref(Point3f(0, 0, 0), Normal3f(0, 0, 0),
+                    Vector3f(0, 0, 0), Vector3f(0, 0, 1), 0,
+                    MediumInterface());
+
+    const int nTheta = 64, nPhi = 128;
+    Float integral = 0;
+    for (int t = 0; t < nTheta; ++t) {
+        Float theta0 = Pi * t / nTheta;
+        Float theta1 = Pi * (t + 1) / nTheta;
+        Float theta = Pi * (t + Float(0.5)) / nTheta;
+        Float cellSolidAngle = (2 * Pi / nPhi) * (std::cos(theta0) -
+                                                  std::cos(theta1));
+        for (int p = 0; p < nPhi; ++p) {
+            Float phi = 2 * Pi * (p + Float(0.5)) / nPhi;
+            Vector3f wi(std::sin(theta) * std::cos(phi),
+                        std::sin(theta) * std::sin(phi), std::cos(theta));
+            Float pdf = light.Pdf_Li(ref, wi);
+            EXPECT_TRUE(std::isfinite(pdf));
+            EXPECT_GE(pdf, 0);
+            integral += pdf * cellSolidAngle;
+        }
+    }
+    EXPECT_NEAR(integral, 1, 1e-3);
+    EXPECT_TRUE(std::isfinite(light.Pdf_Li(ref, Vector3f(0, 0, 1))));
+    ParallelCleanup();
 }
 
 TEST(LowDiscrepancy, RadicalInverse) {
